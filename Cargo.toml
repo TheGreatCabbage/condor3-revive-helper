@@ -1,15 +1,15 @@
 [package]
 name = "condor3-revive-helper"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 default-run = "gui"
 
 [dependencies]
 indexmap = "2.13.0"
 winreg = "0.55"
-eframe = "0.29"
+eframe = "0.33"
 chrono = { version = "0.4", optional = true }
-windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_System_SystemServices", "Win32_System_Diagnostics_Debug"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_System_SystemServices", "Win32_System_Diagnostics_Debug"] }
 
 [features]
 default = []

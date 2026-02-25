@@ -201,7 +201,7 @@ fn main() -> eframe::Result {
                 log(&format!("Starting target process with bypass: {}", cmd_line));
                 let success = CreateProcessW(
                     None,
-                    PWSTR(cmd_line_w.as_mut_ptr()),
+                    Some(PWSTR(cmd_line_w.as_mut_ptr())),
                     None,
                     None,
                     false,
