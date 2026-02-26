@@ -2,7 +2,7 @@
 
 A lightweight utility for Condor 3, to enable VR support via Revive more easily. When enabled, any launch of Condor - whether by the normal shortcut, or via the Server List - will be routed via the ReviveInjector to ensure it works in VR. 
 
-<img src="assets/screenshot0.png" alt="Screenshot of Condor 3 Revive Helper" width="40%">
+<img src="assets/screenshot0.png" alt="Screenshot of Condor 3 Revive Helper" width="60%">
 
 > [!tip]
 > This program also supports Condor 2, and it works with the latest Revive in addition to older versions. 
@@ -21,12 +21,6 @@ A lightweight utility for Condor 3, to enable VR support via Revive more easily.
 Then, whenever you want to run Condor, just launch it as you normally would. The helper will automatically intercept the launch and initialize VR support.
 
 To go back to standard mode, simply open the helper again and click Disable VR.
-
----
-
-## How it Works
-
-The helper uses the Windows Image File Execution Options (IFEO) feature to set a "Debugger" for Condor.exe. When you launch the game, Windows runs CondorVR.exe instead, which performs the necessary VR initialization before starting the actual game process.
 
 ---
 
