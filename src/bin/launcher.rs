@@ -17,7 +17,6 @@ use std::{thread, time::Duration, time::Instant};
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Diagnostics::Debug::*;
 use windows::Win32::System::Threading::*;
-use windows::core::*;
 
 use eframe::egui;
 
@@ -150,6 +149,24 @@ fn main() -> eframe::Result {
 
     let is_manual = args.len() < 2;
 
+    let mut lock_path = env::current_exe().unwrap();
+    lock_path.pop();
+    lock_path.push("CondorVR_launch.lock");
+
+    let mut lock_error = None;
+    let mut lock_created = false;
+
+    if !is_manual {
+        if lock_path.exists() {
+            let msg = "Another launch is already in progress, or a previous launch failed.\n\nTo prevent an infinite loop, this launch has been blocked.\n\nIf you are sure no other instance is running, delete:\nCondorVR_launch.lock".to_string();
+            log(&format!("Blocker: {}", msg));
+            lock_error = Some(msg);
+        } else if let Ok(_) = std::fs::File::create(&lock_path) {
+            lock_created = true;
+            log("Lockfile created.");
+        }
+    }
+
     // Parse target path and game args
     let mut target_parts = Vec::new();
     let mut game_args = Vec::new();
@@ -173,62 +190,16 @@ fn main() -> eframe::Result {
     }
 
     let target_path = target_parts.join(" ");
+
     let state = Arc::new(LauncherState {
         progress: AtomicU32::new(0.0f32.to_bits()),
         finished: AtomicBool::new(false),
-        error_message: std::sync::Mutex::new(None),
+        error_message: std::sync::Mutex::new(lock_error.clone()),
     });
 
     let state_clone = Arc::clone(&state);
-    let handle = if !is_manual {
+    let handle = if !is_manual && lock_error.is_none() {
         Some(thread::spawn(move || {
-            // Check for IFEO bypass to avoid infinite loop when ReviveInjector launches Condor
-            if env::var("C3_REVIVE_BYPASS").is_ok() {
-                log("Bypass detected, launching Condor directly...");
-                unsafe {
-                    let mut cmd_line = format!("\"{}\"", target_path);
-                    for arg in game_args {
-                        cmd_line.push(' ');
-                        if arg.contains(' ') && !arg.starts_with('"') {
-                            cmd_line.push_str(&format!("\"{}\"", arg));
-                        } else {
-                            cmd_line.push_str(&arg);
-                        }
-                    }
-                    let mut cmd_line_w: Vec<u16> =
-                        cmd_line.encode_utf16().chain(std::iter::once(0)).collect();
-
-                    let mut si = STARTUPINFOW::default();
-                    si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-                    let mut pi = PROCESS_INFORMATION::default();
-
-                    let success = CreateProcessW(
-                        None,
-                        Some(PWSTR(cmd_line_w.as_mut_ptr())),
-                        None,
-                        None,
-                        false,
-                        DEBUG_ONLY_THIS_PROCESS,
-                        None,
-                        None,
-                        &si,
-                        &mut pi,
-                    );
-
-                    if let Err(e) = success {
-                        let msg = format!("Failed to start Condor: {}", e);
-                        log(&format!("Error: {}", msg));
-                        *state_clone.error_message.lock().unwrap() = Some(msg);
-                    } else {
-                        log("Condor started successfully (bypassed IFEO).");
-                        let _ = CloseHandle(pi.hProcess);
-                        let _ = CloseHandle(pi.hThread);
-                        state_clone.finished.store(true, Ordering::Relaxed);
-                    }
-                }
-                return;
-            }
-
             let mut revive_path = if let Ok(env_path) = env::var("C3_REVIVE_INJECTOR_PATH") {
                 env_path
             } else {
@@ -251,14 +222,14 @@ fn main() -> eframe::Result {
 
             log(&format!("Intercepted launch of: {}", target_path));
 
+            // Start progress bar at 5% to show we're active
+            state_clone.progress.store(0.05f32.to_bits(), Ordering::Relaxed);
+
             if Path::new(&revive_path).exists() {
                 log(&format!("Running Revive Injector: {}", revive_path));
                 let mut cmd = std::process::Command::new(&revive_path);
                 
-                // Set the bypass variable for the child process so it doesn't trigger another launcher
-                cmd.env("C3_REVIVE_BYPASS", "1");
-                
-                // Pass target path and args to ReviveInjector as requested
+                // Pass target path and args to ReviveInjector
                 cmd.arg(&target_path);
                 for arg in game_args {
                     cmd.arg(arg);
@@ -272,47 +243,81 @@ fn main() -> eframe::Result {
                 #[cfg(windows)]
                 {
                     use std::os::windows::process::CommandExt;
-                    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                    // Use CREATE_NO_WINDOW (0x08000000) AND DEBUG_ONLY_THIS_PROCESS (0x00000002)
+                    // to bypass IFEO for anything ReviveInjector launches.
+                    cmd.creation_flags(0x08000000 | 0x00000002);
                 }
 
-                let output = cmd.output();
+                log("Waiting for Revive Injector to initialize...");
+                state_clone.progress.store(0.15f32.to_bits(), Ordering::Relaxed);
+                
+                let child = cmd.spawn();
 
-                match output {
-                    Ok(out) => {
-                        if out.status.success() {
-                            log("Revive Injector reported success.");
-                        } else {
-                            let stdout = String::from_utf8_lossy(&out.stdout);
-                            let stderr = String::from_utf8_lossy(&out.stderr);
-                            let msg = format!(
-                                "Revive Injector failed ({}).\nSTDOUT: {}\nSTDERR: {}",
-                                out.status, stdout, stderr
-                            );
-                            log(&format!("Error: {}", msg));
-                            *state_clone.error_message.lock().unwrap() = Some(msg);
+                match child {
+                    Ok(_) => {
+                        log("Revive Injector started. Entering debug-bypass loop...");
+                        unsafe {
+                            let mut event = DEBUG_EVENT::default();
+                            while WaitForDebugEvent(&mut event, INFINITE).is_ok() {
+                                let continue_status = DBG_CONTINUE;
+                                
+                                if event.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT {
+                                    let exit_code = event.u.ExitProcess.dwExitCode;
+                                    if exit_code != 0 {
+                                        let msg = format!("Revive Injector failed with exit code: {}", exit_code);
+                                        log(&format!("Error: {}", msg));
+                                        *state_clone.error_message.lock().unwrap() = Some(msg);
+                                    } else {
+                                        log("Revive Injector reported success.");
+                                        state_clone.progress.store(0.50f32.to_bits(), Ordering::Relaxed);
+                                    }
+                                    let _ = ContinueDebugEvent(event.dwProcessId, event.dwThreadId, continue_status);
+                                    break;
+                                }
+                                
+                                // Close handles to avoid leaks
+                                match event.dwDebugEventCode {
+                                    CREATE_PROCESS_DEBUG_EVENT => {
+                                        let info = event.u.CreateProcessInfo;
+                                        if !info.hFile.is_invalid() { let _ = CloseHandle(info.hFile); }
+                                        if !info.hProcess.is_invalid() { let _ = CloseHandle(info.hProcess); }
+                                        if !info.hThread.is_invalid() { let _ = CloseHandle(info.hThread); }
+                                    }
+                                    LOAD_DLL_DEBUG_EVENT => {
+                                        let info = event.u.LoadDll;
+                                        if !info.hFile.is_invalid() { let _ = CloseHandle(info.hFile); }
+                                    }
+                                    _ => {}
+                                }
+                                
+                                let _ = ContinueDebugEvent(event.dwProcessId, event.dwThreadId, continue_status);
+                            }
                         }
                     }
                     Err(e) => {
                         let msg = format!("Failed to run Revive Injector: {}", e);
                         log(&format!("Error: {}", msg));
                         *state_clone.error_message.lock().unwrap() = Some(msg);
+                        return; // Stop on error
                     }
                 }
             } else {
                 let msg = format!("Revive Injector not found at {}", revive_path);
                 log(&format!("Error: {}", msg));
                 *state_clone.error_message.lock().unwrap() = Some(msg);
+                return; // Stop on error
             }
 
             // Wait for stabilization
             log("Waiting 3 seconds for stabilization...");
             let start_time = Instant::now();
+            let base_progress = 0.50f32;
             let wait_duration = Duration::from_secs(3);
             while start_time.elapsed() < wait_duration {
-                let progress = start_time.elapsed().as_secs_f32() / wait_duration.as_secs_f32();
+                let p = base_progress + (start_time.elapsed().as_secs_f32() / wait_duration.as_secs_f32()) * (1.0 - base_progress);
                 state_clone
                     .progress
-                    .store(progress.to_bits(), Ordering::Relaxed);
+                    .store(p.to_bits(), Ordering::Relaxed);
                 thread::sleep(Duration::from_millis(50));
             }
             state_clone
@@ -343,6 +348,11 @@ fn main() -> eframe::Result {
         options,
         Box::new(|_cc| Ok(Box::new(LauncherApp::new(state, is_manual)))),
     );
+
+    if lock_created {
+        let _ = std::fs::remove_file(&lock_path);
+        log("Lockfile removed.");
+    }
 
     if let Some(h) = handle {
         let _ = h.join();
