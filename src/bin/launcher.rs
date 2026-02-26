@@ -182,6 +182,53 @@ fn main() -> eframe::Result {
     let state_clone = Arc::clone(&state);
     let handle = if !is_manual {
         Some(thread::spawn(move || {
+            // Check for IFEO bypass to avoid infinite loop when ReviveInjector launches Condor
+            if env::var("C3_REVIVE_BYPASS").is_ok() {
+                log("Bypass detected, launching Condor directly...");
+                unsafe {
+                    let mut cmd_line = format!("\"{}\"", target_path);
+                    for arg in game_args {
+                        cmd_line.push(' ');
+                        if arg.contains(' ') && !arg.starts_with('"') {
+                            cmd_line.push_str(&format!("\"{}\"", arg));
+                        } else {
+                            cmd_line.push_str(&arg);
+                        }
+                    }
+                    let mut cmd_line_w: Vec<u16> =
+                        cmd_line.encode_utf16().chain(std::iter::once(0)).collect();
+
+                    let mut si = STARTUPINFOW::default();
+                    si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+                    let mut pi = PROCESS_INFORMATION::default();
+
+                    let success = CreateProcessW(
+                        None,
+                        Some(PWSTR(cmd_line_w.as_mut_ptr())),
+                        None,
+                        None,
+                        false,
+                        DEBUG_ONLY_THIS_PROCESS,
+                        None,
+                        None,
+                        &si,
+                        &mut pi,
+                    );
+
+                    if let Err(e) = success {
+                        let msg = format!("Failed to start Condor: {}", e);
+                        log(&format!("Error: {}", msg));
+                        *state_clone.error_message.lock().unwrap() = Some(msg);
+                    } else {
+                        log("Condor started successfully (bypassed IFEO).");
+                        let _ = CloseHandle(pi.hProcess);
+                        let _ = CloseHandle(pi.hThread);
+                        state_clone.finished.store(true, Ordering::Relaxed);
+                    }
+                }
+                return;
+            }
+
             let mut revive_path = if let Ok(env_path) = env::var("C3_REVIVE_INJECTOR_PATH") {
                 env_path
             } else {
@@ -204,102 +251,61 @@ fn main() -> eframe::Result {
 
             log(&format!("Intercepted launch of: {}", target_path));
 
-            unsafe {
-                // 1. Launch Condor.exe with IFEO bypass flags
-                let mut cmd_line = format!("\"{}\"", target_path);
+            if Path::new(&revive_path).exists() {
+                log(&format!("Running Revive Injector: {}", revive_path));
+                let mut cmd = std::process::Command::new(&revive_path);
+                
+                // Set the bypass variable for the child process so it doesn't trigger another launcher
+                cmd.env("C3_REVIVE_BYPASS", "1");
+                
+                // Pass target path and args to ReviveInjector as requested
+                cmd.arg(&target_path);
                 for arg in game_args {
-                    cmd_line.push(' ');
-                    if arg.contains(' ') && !arg.starts_with('"') {
-                        cmd_line.push_str(&format!("\"{}\"", arg));
-                    } else {
-                        cmd_line.push_str(&arg);
-                    }
+                    cmd.arg(arg);
                 }
-                let mut cmd_line_w: Vec<u16> =
-                    cmd_line.encode_utf16().chain(std::iter::once(0)).collect();
 
-                let mut si = STARTUPINFOW::default();
-                si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-                let mut pi = PROCESS_INFORMATION::default();
+                // Set CWD to the injector's directory
+                if let Some(parent) = Path::new(&revive_path).parent() {
+                    cmd.current_dir(parent);
+                }
 
-                log(&format!(
-                    "Starting target process with bypass: {}",
-                    cmd_line
-                ));
-                let success = CreateProcessW(
-                    None,
-                    Some(PWSTR(cmd_line_w.as_mut_ptr())),
-                    None,
-                    None,
-                    false,
-                    DEBUG_ONLY_THIS_PROCESS | CREATE_SUSPENDED,
-                    None,
-                    None,
-                    &si,
-                    &mut pi,
-                );
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                }
 
-                if let Err(e) = success {
-                    let msg = format!("Failed to start Condor: {}", e);
-                    log(&format!("Error: {}", msg));
-                    *state_clone.error_message.lock().unwrap() = Some(msg);
-                } else {
-                    log(&format!(
-                        "Process started. PID: {}, Thread: {:?}",
-                        pi.dwProcessId, pi.hThread
-                    ));
+                let output = cmd.output();
 
-                    // 2. Detach immediately to bypass IFEO while keeping it suspended
-                    let _ = DebugActiveProcessStop(pi.dwProcessId);
-                    log("Detached from process (IFEO bypassed).");
-
-                    // 3. Use ReviveInjector to inject into the suspended process
-                    if Path::new(&revive_path).exists() {
-                        log(&format!(
-                            "Running Revive Injector for PID {}: {}",
-                            pi.dwProcessId, revive_path
-                        ));
-                        let mut cmd = std::process::Command::new(&revive_path);
-                        cmd.arg("/handle").arg(pi.dwProcessId.to_string());
-
-                        #[cfg(windows)]
-                        {
-                            use std::os::windows::process::CommandExt;
-                            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                match output {
+                    Ok(out) => {
+                        if out.status.success() {
+                            log("Revive Injector reported success.");
+                        } else {
+                            let stdout = String::from_utf8_lossy(&out.stdout);
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            let msg = format!(
+                                "Revive Injector failed ({}).\nSTDOUT: {}\nSTDERR: {}",
+                                out.status, stdout, stderr
+                            );
+                            log(&format!("Error: {}", msg));
+                            *state_clone.error_message.lock().unwrap() = Some(msg);
                         }
-
-                        let status = cmd.status();
-
-                        match status {
-                            Ok(s) if s.success() => log("Revive Injector reported success."),
-                            Ok(s) => {
-                                let msg = format!("Revive Injector exited with status: {}", s);
-                                log(&format!("Error: {}", msg));
-                                *state_clone.error_message.lock().unwrap() = Some(msg);
-                            }
-                            Err(e) => {
-                                let msg = format!("Failed to run Revive Injector: {}", e);
-                                log(&format!("Error: {}", msg));
-                                *state_clone.error_message.lock().unwrap() = Some(msg);
-                            }
-                        }
-                    } else {
-                        let msg = format!("Revive Injector not found at {}", revive_path);
+                    }
+                    Err(e) => {
+                        let msg = format!("Failed to run Revive Injector: {}", e);
                         log(&format!("Error: {}", msg));
                         *state_clone.error_message.lock().unwrap() = Some(msg);
                     }
-
-                    // 4. Resume the process
-                    log("Resuming target process...");
-                    ResumeThread(pi.hThread);
-
-                    let _ = CloseHandle(pi.hProcess);
-                    let _ = CloseHandle(pi.hThread);
                 }
+            } else {
+                let msg = format!("Revive Injector not found at {}", revive_path);
+                log(&format!("Error: {}", msg));
+                *state_clone.error_message.lock().unwrap() = Some(msg);
             }
 
             // Wait for stabilization
-            log("Waiting 3 seconds for game process to stabilize...");
+            log("Waiting 3 seconds for stabilization...");
             let start_time = Instant::now();
             let wait_duration = Duration::from_secs(3);
             while start_time.elapsed() < wait_duration {
