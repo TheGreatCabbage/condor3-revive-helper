@@ -1,15 +1,16 @@
-//! This module controls the creation/deletion of the registry key which causes Condor.exe to 
-//! trigger our launcher whenever Condor.exe is executed. 
+//! This module controls the creation/deletion of the registry key which causes Condor.exe to
+//! trigger our launcher whenever Condor.exe is executed.
 
 #![windows_subsystem = "windows"]
 
 use std::env;
 use std::io;
-use winreg::enums::*;
 use winreg::RegKey;
+use winreg::enums::*;
 
 const TARGET_EXE: &str = "Condor.exe";
-const IFEO_PATH: &str = r#"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"#;
+const IFEO_PATH: &str =
+    r#"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"#;
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -29,7 +30,8 @@ fn main() -> io::Result<()> {
             launcher_path.push("CondorVR.exe");
             let launcher_path_str = launcher_path.to_str().expect("Invalid path");
 
-            let (target_key, _) = hklm.create_subkey_with_flags(&target_key_path, KEY_ALL_ACCESS)?;
+            let (target_key, _) =
+                hklm.create_subkey_with_flags(&target_key_path, KEY_ALL_ACCESS)?;
             let launcher_command = format!("\"{}\"", launcher_path_str);
             target_key.set_value("Debugger", &launcher_command)?;
             println!("Hook activated with: {}", launcher_command);

@@ -1,6 +1,6 @@
-//! The launcher which is triggered by the registry key when Condor.exe is executed; 
-//! it then launches Condor with ReviveInjector, setting flags to avoid the registry 
-//! hook triggering again. 
+//! The launcher which is triggered by the registry key when Condor.exe is executed;
+//! it then launches Condor with ReviveInjector, setting flags to avoid the registry
+//! hook triggering again.
 
 #![windows_subsystem = "windows"]
 
@@ -14,10 +14,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::{thread, time::Duration, time::Instant};
 
-use windows::core::*;
 use windows::Win32::Foundation::*;
-use windows::Win32::System::Threading::*;
 use windows::Win32::System::Diagnostics::Debug::*;
+use windows::Win32::System::Threading::*;
+use windows::core::*;
 
 use eframe::egui;
 
@@ -35,7 +35,7 @@ fn log(msg: &str) {
             .append(true)
             .open(log_path)
             .unwrap();
-        
+
         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
         let line = format!("[{}] {}\n", timestamp, msg);
         let _ = file.write_all(line.as_bytes());
@@ -95,11 +95,11 @@ impl eframe::App for LauncherApp {
                 } else {
                     ui.heading("Starting Condor with VR...");
                     ui.add_space(15.0);
-                    
+
                     let progress_bits = self.state.progress.load(Ordering::Relaxed);
                     let progress = f32::from_bits(progress_bits);
                     ui.add(egui::ProgressBar::new(progress).show_percentage());
-                    
+
                     ui.add_space(15.0);
                     ui.label("Initializing VR support...");
                     ui.label("This window will close automatically.");
@@ -107,7 +107,10 @@ impl eframe::App for LauncherApp {
                 }
 
                 ui.add_space(5.0);
-                if ui.add_sized([140.0, 32.0], egui::Button::new("Open VR Settings")).clicked() {
+                if ui
+                    .add_sized([140.0, 32.0], egui::Button::new("Open VR Settings"))
+                    .clicked()
+                {
                     self.open_settings();
                 }
                 ui.add_space(10.0);
@@ -167,12 +170,12 @@ fn main() -> eframe::Result {
             } else {
                 r#"C:\Program Files\Revive\Revive\ReviveInjector.exe"#.to_string()
             };
-            
+
             if env::var("C3_REVIVE_INJECTOR_PATH").is_err() && !Path::new(&revive_path).exists() {
                 let mut p = std::path::PathBuf::from(&revive_path);
                 p.pop(); // to C:\Program Files\Revive\Revive\
                 p.pop(); // to C:\Program Files\Revive\
-                
+
                 if let Ok(entries) = std::fs::read_dir(&p) {
                     for entry in entries.flatten() {
                         let filename = entry.file_name().to_string_lossy().to_lowercase();
@@ -183,7 +186,7 @@ fn main() -> eframe::Result {
                     }
                 }
             }
-            
+
             log(&format!("Intercepted launch of: {}", target_path));
 
             unsafe {
@@ -197,13 +200,17 @@ fn main() -> eframe::Result {
                         cmd_line.push_str(&arg);
                     }
                 }
-                let mut cmd_line_w: Vec<u16> = cmd_line.encode_utf16().chain(std::iter::once(0)).collect();
+                let mut cmd_line_w: Vec<u16> =
+                    cmd_line.encode_utf16().chain(std::iter::once(0)).collect();
 
                 let mut si = STARTUPINFOW::default();
                 si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
                 let mut pi = PROCESS_INFORMATION::default();
 
-                log(&format!("Starting target process with bypass: {}", cmd_line));
+                log(&format!(
+                    "Starting target process with bypass: {}",
+                    cmd_line
+                ));
                 let success = CreateProcessW(
                     None,
                     Some(PWSTR(cmd_line_w.as_mut_ptr())),
@@ -220,39 +227,48 @@ fn main() -> eframe::Result {
                 if let Err(e) = success {
                     log(&format!("Error: CreateProcessW failed: {}", e));
                 } else {
-                    log(&format!("Process started. PID: {}, Thread: {:?}", pi.dwProcessId, pi.hThread));
-                    
+                    log(&format!(
+                        "Process started. PID: {}, Thread: {:?}",
+                        pi.dwProcessId, pi.hThread
+                    ));
+
                     // 2. Detach immediately to bypass IFEO while keeping it suspended
                     let _ = DebugActiveProcessStop(pi.dwProcessId);
                     log("Detached from process (IFEO bypassed).");
 
-                                    // 3. Use ReviveInjector to inject into the suspended process
-                                    if Path::new(&revive_path).exists() {
-                                        log(&format!("Running Revive Injector for PID {}: {}", pi.dwProcessId, revive_path));
-                                        let mut cmd = std::process::Command::new(&revive_path);
-                                        cmd.arg("/handle")
-                                           .arg(pi.dwProcessId.to_string());
-                                        
-                                        #[cfg(windows)]
-                                        {
-                                            use std::os::windows::process::CommandExt;
-                                            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-                                        }
-                    
-                                        let status = cmd.status();
-                                        
-                                        match status {                            Ok(s) if s.success() => log("Revive Injector reported success."),
+                    // 3. Use ReviveInjector to inject into the suspended process
+                    if Path::new(&revive_path).exists() {
+                        log(&format!(
+                            "Running Revive Injector for PID {}: {}",
+                            pi.dwProcessId, revive_path
+                        ));
+                        let mut cmd = std::process::Command::new(&revive_path);
+                        cmd.arg("/handle").arg(pi.dwProcessId.to_string());
+
+                        #[cfg(windows)]
+                        {
+                            use std::os::windows::process::CommandExt;
+                            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                        }
+
+                        let status = cmd.status();
+
+                        match status {
+                            Ok(s) if s.success() => log("Revive Injector reported success."),
                             Ok(s) => log(&format!("Revive Injector exited with status: {}", s)),
                             Err(e) => log(&format!("Failed to run Revive Injector: {}", e)),
                         }
                     } else {
-                        log(&format!("Error: Revive Injector not found at {}", revive_path));
+                        log(&format!(
+                            "Error: Revive Injector not found at {}",
+                            revive_path
+                        ));
                     }
 
                     // 4. Resume the process
                     log("Resuming target process...");
                     ResumeThread(pi.hThread);
-                    
+
                     let _ = CloseHandle(pi.hProcess);
                     let _ = CloseHandle(pi.hThread);
                 }
@@ -264,10 +280,14 @@ fn main() -> eframe::Result {
             let wait_duration = Duration::from_secs(3);
             while start_time.elapsed() < wait_duration {
                 let progress = start_time.elapsed().as_secs_f32() / wait_duration.as_secs_f32();
-                state_clone.progress.store(progress.to_bits(), Ordering::Relaxed);
+                state_clone
+                    .progress
+                    .store(progress.to_bits(), Ordering::Relaxed);
                 thread::sleep(Duration::from_millis(50));
             }
-            state_clone.progress.store(1.0f32.to_bits(), Ordering::Relaxed);
+            state_clone
+                .progress
+                .store(1.0f32.to_bits(), Ordering::Relaxed);
 
             log("Done. Launcher exiting.");
             state_clone.finished.store(true, Ordering::Relaxed);
@@ -299,4 +319,3 @@ fn main() -> eframe::Result {
     }
     result
 }
-

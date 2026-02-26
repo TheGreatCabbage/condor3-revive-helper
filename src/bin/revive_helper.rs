@@ -1,18 +1,19 @@
-//! The GUI program which allows the user to enable/disable VR for Condor. 
+//! The GUI program which allows the user to enable/disable VR for Condor.
 
 #![windows_subsystem = "windows"]
 
 use eframe::egui;
 use std::env;
 use std::process::Command;
-use winreg::enums::*;
 use winreg::RegKey;
+use winreg::enums::*;
 
 // The name of the Condor executable.
 const TARGET_EXE: &str = "Condor.exe";
 
-// The registry path at which we can create a hook which will cause Conder.exe to open our launcher instead. 
-const IFEO_PATH: &str = r#"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"#;
+// The registry path at which we can create a hook which will cause Conder.exe to open our launcher instead.
+const IFEO_PATH: &str =
+    r#"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"#;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -53,20 +54,18 @@ impl ReviveHelperApp {
     fn refresh_status(&mut self) {
         let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
         let key_path = format!(r#"{}\{}"#, IFEO_PATH, TARGET_EXE);
-        
+
         match hklm.open_subkey(&key_path) {
-            Ok(key) => {
-                match key.get_value::<String, _>("Debugger") {
-                    Ok(_) => {
-                        self.is_active = true;
-                        self.status_msg = "Condor will launch with VR enabled.".to_string();
-                    }
-                    Err(_) => {
-                        self.is_active = false;
-                        self.status_msg = "Condor will launch with VR disabled.".to_string();
-                    }
+            Ok(key) => match key.get_value::<String, _>("Debugger") {
+                Ok(_) => {
+                    self.is_active = true;
+                    self.status_msg = "Condor will launch with VR enabled.".to_string();
                 }
-            }
+                Err(_) => {
+                    self.is_active = false;
+                    self.status_msg = "Condor will launch with VR disabled.".to_string();
+                }
+            },
             Err(_) => {
                 self.is_active = false;
                 self.status_msg = "Condor will launch with VR disabled.".to_string();
@@ -76,11 +75,15 @@ impl ReviveHelperApp {
 
     fn toggle_hook(&mut self) {
         if let Some(setup_path) = self.get_setup_path() {
-            let action = if self.is_active { "deactivate" } else { "activate" };
-            
+            let action = if self.is_active {
+                "deactivate"
+            } else {
+                "activate"
+            };
+
             // Use PowerShell to trigger UAC elevation via Start-Process -Verb RunAs
             let mut command = Command::new("powershell");
-            
+
             #[cfg(windows)]
             {
                 use std::os::windows::process::CommandExt;
