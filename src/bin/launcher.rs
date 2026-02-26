@@ -46,6 +46,7 @@ fn log(msg: &str) {
 struct LauncherState {
     progress: AtomicU32,
     finished: AtomicBool,
+    error_message: std::sync::Mutex<Option<String>>,
 }
 
 struct LauncherApp {
@@ -78,12 +79,27 @@ impl LauncherApp {
 
 impl eframe::App for LauncherApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if !self.is_manual && self.state.finished.load(Ordering::Relaxed) {
+        let has_error = self.state.error_message.lock().unwrap().is_some();
+        if !self.is_manual && self.state.finished.load(Ordering::Relaxed) && !has_error {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            if let Some(msg) = self.state.error_message.lock().unwrap().clone() {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(10.0);
+                    ui.heading("Launch Error");
+                    ui.add_space(10.0);
+                    ui.label(&msg);
+                    ui.add_space(20.0);
+                    if ui.button("Close").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+                return;
+            }
+
             ui.vertical_centered(|ui| {
                 ui.add_space(10.0);
                 if self.is_manual {
@@ -160,6 +176,7 @@ fn main() -> eframe::Result {
     let state = Arc::new(LauncherState {
         progress: AtomicU32::new(0.0f32.to_bits()),
         finished: AtomicBool::new(false),
+        error_message: std::sync::Mutex::new(None),
     });
 
     let state_clone = Arc::clone(&state);
@@ -172,17 +189,15 @@ fn main() -> eframe::Result {
             };
 
             if env::var("C3_REVIVE_INJECTOR_PATH").is_err() && !Path::new(&revive_path).exists() {
-                let mut p = std::path::PathBuf::from(&revive_path);
-                p.pop(); // to C:\Program Files\Revive\Revive\
-                p.pop(); // to C:\Program Files\Revive\
+                let fallbacks = [
+                    r#"C:\Program Files\Revive\Revive\x64\ReviveInjector.exe"#,
+                    r#"C:\Program Files\Revive\ReviveInjector.exe"#,
+                ];
 
-                if let Ok(entries) = std::fs::read_dir(&p) {
-                    for entry in entries.flatten() {
-                        let filename = entry.file_name().to_string_lossy().to_lowercase();
-                        if filename.starts_with("reviveinjector") && filename.ends_with("x64.exe") {
-                            revive_path = entry.path().to_string_lossy().to_string();
-                            break;
-                        }
+                for fallback in fallbacks {
+                    if Path::new(fallback).exists() {
+                        revive_path = fallback.to_string();
+                        break;
                     }
                 }
             }
@@ -225,7 +240,9 @@ fn main() -> eframe::Result {
                 );
 
                 if let Err(e) = success {
-                    log(&format!("Error: CreateProcessW failed: {}", e));
+                    let msg = format!("Failed to start Condor: {}", e);
+                    log(&format!("Error: {}", msg));
+                    *state_clone.error_message.lock().unwrap() = Some(msg);
                 } else {
                     log(&format!(
                         "Process started. PID: {}, Thread: {:?}",
@@ -255,14 +272,21 @@ fn main() -> eframe::Result {
 
                         match status {
                             Ok(s) if s.success() => log("Revive Injector reported success."),
-                            Ok(s) => log(&format!("Revive Injector exited with status: {}", s)),
-                            Err(e) => log(&format!("Failed to run Revive Injector: {}", e)),
+                            Ok(s) => {
+                                let msg = format!("Revive Injector exited with status: {}", s);
+                                log(&format!("Error: {}", msg));
+                                *state_clone.error_message.lock().unwrap() = Some(msg);
+                            }
+                            Err(e) => {
+                                let msg = format!("Failed to run Revive Injector: {}", e);
+                                log(&format!("Error: {}", msg));
+                                *state_clone.error_message.lock().unwrap() = Some(msg);
+                            }
                         }
                     } else {
-                        log(&format!(
-                            "Error: Revive Injector not found at {}",
-                            revive_path
-                        ));
+                        let msg = format!("Revive Injector not found at {}", revive_path);
+                        log(&format!("Error: {}", msg));
+                        *state_clone.error_message.lock().unwrap() = Some(msg);
                     }
 
                     // 4. Resume the process
