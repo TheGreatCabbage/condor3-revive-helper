@@ -1,3 +1,5 @@
+//! The GUI program which allows the user to enable/disable VR for Condor. 
+
 #![windows_subsystem = "windows"]
 
 use eframe::egui;
@@ -6,7 +8,10 @@ use std::process::Command;
 use winreg::enums::*;
 use winreg::RegKey;
 
+// The name of the Condor executable.
 const TARGET_EXE: &str = "Condor.exe";
+
+// The registry path at which we can create a hook which will cause Conder.exe to open our launcher instead. 
 const IFEO_PATH: &str = r#"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"#;
 
 fn main() -> eframe::Result {

@@ -1,6 +1,4 @@
 [Setup]
-; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
-; (To generate a new GUID, click Tools | Generate GUID inside the IDE.)
 AppId={{1490D457-CF8A-4229-8ED4-BCEB2FCC1980}
 AppName=Condor3 Revive Helper
 AppVersion=0.1.0

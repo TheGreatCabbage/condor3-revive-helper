@@ -1,3 +1,6 @@
+//! This module controls the creation/deletion of the registry key which causes Condor.exe to 
+//! trigger our launcher whenever Condor.exe is executed. 
+
 #![windows_subsystem = "windows"]
 
 use std::env;

@@ -1,3 +1,7 @@
+//! The launcher which is triggered by the registry key when Condor.exe is executed; 
+//! it then launches Condor with ReviveInjector, setting flags to avoid the registry 
+//! hook triggering again. 
+
 #![windows_subsystem = "windows"]
 
 use std::env;
@@ -58,6 +62,7 @@ impl LauncherApp {
         if let Ok(mut p) = env::current_exe() {
             p.pop();
             p.push("gui.exe");
+
             if p.exists() {
                 let mut cmd = std::process::Command::new(p);
                 #[cfg(windows)]
