@@ -25,9 +25,9 @@ Root: HKLM; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Image File Exe
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "target\release\gui.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "target\release\Condor-VR-Configurer.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "target\release\CondorVR.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "target\opt\gui.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "target\opt\Condor-VR-Configurer.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "target\opt\CondorVR.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
