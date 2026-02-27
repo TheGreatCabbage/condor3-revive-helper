@@ -15,10 +15,73 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::{thread, time::Duration, time::Instant};
 
 use windows::Win32::Foundation::*;
-use windows::Win32::System::Diagnostics::Debug::*;
-use windows::Win32::System::Threading::*;
+use windows::Win32::System::Services::*;
+use windows::core::PCWSTR;
 
 use eframe::egui;
+
+const BYPASS_SERVICE_NAME: &str = "CondorReviveHelperService";
+
+fn trigger_bypass_service() -> Result<(), Box<dyn std::error::Error>> {
+    unsafe {
+        let scm = match OpenSCManagerW(None, None, SC_MANAGER_CONNECT) {
+            Ok(h) => h,
+            Err(e) => {
+                log(&format!("Error: OpenSCManagerW failed: {}", e));
+                return Err(e.into());
+            }
+        };
+        
+        let service_name_w: Vec<u16> = BYPASS_SERVICE_NAME.encode_utf16().chain(Some(0)).collect();
+        let service = match OpenServiceW(
+            scm,
+            PCWSTR(service_name_w.as_ptr()),
+            SERVICE_START | SERVICE_QUERY_STATUS,
+        ) {
+            Ok(h) => h,
+            Err(e) => {
+                log(&format!("Error: OpenServiceW failed for {}: {}", BYPASS_SERVICE_NAME, e));
+                let _ = CloseServiceHandle(scm);
+                return Err(e.into());
+            }
+        };
+
+        if StartServiceW(service, None).is_ok() {
+            log("Service start signal sent successfully.");
+        } else {
+            let err = windows::core::Error::from_thread();
+            if err.code() == ERROR_SERVICE_ALREADY_RUNNING.to_hresult() {
+                log("Service is already running.");
+            } else {
+                log(&format!("Error: StartServiceW failed: {}", err));
+                let _ = CloseServiceHandle(service);
+                let _ = CloseServiceHandle(scm);
+                return Err(err.into());
+            }
+        }
+
+        // Wait for the service to be in RUNNING state
+        let mut status = SERVICE_STATUS::default();
+        let start_wait = Instant::now();
+        let timeout = Duration::from_secs(5);
+
+        while start_wait.elapsed() < timeout {
+            if QueryServiceStatus(service, &mut status).is_ok() {
+                if status.dwCurrentState == SERVICE_RUNNING {
+                    log("Service is now running.");
+                    // Give it a tiny bit more time to ensure the hook is actually deleted
+                    thread::sleep(Duration::from_millis(200));
+                    break;
+                }
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        let _ = CloseServiceHandle(service);
+        let _ = CloseServiceHandle(scm);
+        Ok(())
+    }
+}
 
 fn log(msg: &str) {
     println!("{}", msg);
@@ -225,6 +288,14 @@ fn main() -> eframe::Result {
             // Start progress bar at 5% to show we're active
             state_clone.progress.store(0.05f32.to_bits(), Ordering::Relaxed);
 
+            // Trigger the CondorReviveHelperService to bypass IFEO
+            log("Triggering CondorReviveHelperService to bypass IFEO...");
+            if let Err(e) = trigger_bypass_service() {
+                log(&format!("Warning: Failed to trigger bypass service: {}. Launch may fail if IFEO is active.", e));
+            } else {
+                log("Bypass service triggered.");
+            }
+
             if Path::new(&revive_path).exists() {
                 log(&format!("Running Revive Injector: {}", revive_path));
                 let mut cmd = std::process::Command::new(&revive_path);
@@ -243,10 +314,8 @@ fn main() -> eframe::Result {
                 #[cfg(windows)]
                 {
                     use std::os::windows::process::CommandExt;
-                    // Use CREATE_NO_WINDOW (0x08000000) AND DEBUG_PROCESS (0x00000001)
-                    // to bypass IFEO for anything ReviveInjector launches.
-                    // DEBUG_PROCESS ensures children (like Condor.exe) are also debugged and thus bypass IFEO.
-                    cmd.creation_flags(0x08000000 | 0x00000001);
+                    // Just CREATE_NO_WINDOW now, no debug flags needed.
+                    cmd.creation_flags(0x08000000);
                 }
 
                 log("Waiting for Revive Injector to initialize...");
@@ -255,62 +324,23 @@ fn main() -> eframe::Result {
                 let child = cmd.spawn();
 
                 match child {
-                    Ok(child) => {
-                        let injector_pid = child.id();
-                        log(&format!("Revive Injector started (PID: {}). Entering debug-bypass loop...", injector_pid));
-                        unsafe {
-                            let _ = DebugSetProcessKillOnExit(false);
-                            let mut event = DEBUG_EVENT::default();
-                            while WaitForDebugEvent(&mut event, INFINITE).is_ok() {
-                                let mut continue_status = DBG_CONTINUE;
-                                let mut should_continue_event = true;
-                                
-                                match event.dwDebugEventCode {
-                                    EXIT_PROCESS_DEBUG_EVENT => {
-                                        if event.dwProcessId == injector_pid {
-                                            let exit_code = event.u.ExitProcess.dwExitCode;
-                                            if exit_code != 0 {
-                                                let msg = format!("Revive Injector failed with exit code: {}", exit_code);
-                                                log(&format!("Error: {}", msg));
-                                                *state_clone.error_message.lock().unwrap() = Some(msg);
-                                            } else {
-                                                log("Revive Injector reported success.");
-                                                state_clone.progress.store(0.50f32.to_bits(), Ordering::Relaxed);
-                                            }
-                                            let _ = ContinueDebugEvent(event.dwProcessId, event.dwThreadId, continue_status);
-                                            break;
-                                        }
-                                    }
-                                    CREATE_PROCESS_DEBUG_EVENT => {
-                                        let info = event.u.CreateProcessInfo;
-                                        let new_pid = event.dwProcessId;
-                                        
-                                        if new_pid != injector_pid {
-                                            log(&format!("Child process detected (PID: {}). Detaching to bypass IFEO and allow normal execution...", new_pid));
-                                            // Detach immediately so the process runs free of the debugger
-                                            let _ = DebugActiveProcessStop(new_pid);
-                                            should_continue_event = false;
-                                        }
-
-                                        if !info.hFile.is_invalid() { let _ = CloseHandle(info.hFile); }
-                                        if !info.hProcess.is_invalid() { let _ = CloseHandle(info.hProcess); }
-                                        if !info.hThread.is_invalid() { let _ = CloseHandle(info.hThread); }
-                                    }
-                                    EXCEPTION_DEBUG_EVENT => {
-                                        // Default to not handled for exceptions we don't explicitly want to swallow,
-                                        // though DBG_CONTINUE is usually fine for the initial breakpoint.
-                                        continue_status = DBG_CONTINUE;
-                                    }
-                                    LOAD_DLL_DEBUG_EVENT => {
-                                        let info = event.u.LoadDll;
-                                        if !info.hFile.is_invalid() { let _ = CloseHandle(info.hFile); }
-                                    }
-                                    _ => {}
+                    Ok(mut child) => {
+                        log("Revive Injector started. Waiting for it to exit...");
+                        match child.wait() {
+                            Ok(s) => {
+                                if !s.success() {
+                                    let msg = format!("Revive Injector failed with exit code: {}", s);
+                                    log(&format!("Error: {}", msg));
+                                    *state_clone.error_message.lock().unwrap() = Some(msg);
+                                } else {
+                                    log("Revive Injector reported success.");
+                                    state_clone.progress.store(0.50f32.to_bits(), Ordering::Relaxed);
                                 }
-                                
-                                if should_continue_event {
-                                    let _ = ContinueDebugEvent(event.dwProcessId, event.dwThreadId, continue_status);
-                                }
+                            }
+                            Err(e) => {
+                                let msg = format!("Failed to wait for Revive Injector: {}", e);
+                                log(&format!("Error: {}", msg));
+                                *state_clone.error_message.lock().unwrap() = Some(msg);
                             }
                         }
                     }
