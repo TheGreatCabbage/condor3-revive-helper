@@ -243,9 +243,10 @@ fn main() -> eframe::Result {
                 #[cfg(windows)]
                 {
                     use std::os::windows::process::CommandExt;
-                    // Use CREATE_NO_WINDOW (0x08000000) AND DEBUG_ONLY_THIS_PROCESS (0x00000002)
+                    // Use CREATE_NO_WINDOW (0x08000000) AND DEBUG_PROCESS (0x00000001)
                     // to bypass IFEO for anything ReviveInjector launches.
-                    cmd.creation_flags(0x08000000 | 0x00000002);
+                    // DEBUG_PROCESS ensures children (like Condor.exe) are also debugged and thus bypass IFEO.
+                    cmd.creation_flags(0x08000000 | 0x00000001);
                 }
 
                 log("Waiting for Revive Injector to initialize...");
@@ -254,34 +255,51 @@ fn main() -> eframe::Result {
                 let child = cmd.spawn();
 
                 match child {
-                    Ok(_) => {
-                        log("Revive Injector started. Entering debug-bypass loop...");
+                    Ok(child) => {
+                        let injector_pid = child.id();
+                        log(&format!("Revive Injector started (PID: {}). Entering debug-bypass loop...", injector_pid));
                         unsafe {
+                            let _ = DebugSetProcessKillOnExit(false);
                             let mut event = DEBUG_EVENT::default();
                             while WaitForDebugEvent(&mut event, INFINITE).is_ok() {
-                                let continue_status = DBG_CONTINUE;
+                                let mut continue_status = DBG_CONTINUE;
+                                let mut should_continue_event = true;
                                 
-                                if event.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT {
-                                    let exit_code = event.u.ExitProcess.dwExitCode;
-                                    if exit_code != 0 {
-                                        let msg = format!("Revive Injector failed with exit code: {}", exit_code);
-                                        log(&format!("Error: {}", msg));
-                                        *state_clone.error_message.lock().unwrap() = Some(msg);
-                                    } else {
-                                        log("Revive Injector reported success.");
-                                        state_clone.progress.store(0.50f32.to_bits(), Ordering::Relaxed);
-                                    }
-                                    let _ = ContinueDebugEvent(event.dwProcessId, event.dwThreadId, continue_status);
-                                    break;
-                                }
-                                
-                                // Close handles to avoid leaks
                                 match event.dwDebugEventCode {
+                                    EXIT_PROCESS_DEBUG_EVENT => {
+                                        if event.dwProcessId == injector_pid {
+                                            let exit_code = event.u.ExitProcess.dwExitCode;
+                                            if exit_code != 0 {
+                                                let msg = format!("Revive Injector failed with exit code: {}", exit_code);
+                                                log(&format!("Error: {}", msg));
+                                                *state_clone.error_message.lock().unwrap() = Some(msg);
+                                            } else {
+                                                log("Revive Injector reported success.");
+                                                state_clone.progress.store(0.50f32.to_bits(), Ordering::Relaxed);
+                                            }
+                                            let _ = ContinueDebugEvent(event.dwProcessId, event.dwThreadId, continue_status);
+                                            break;
+                                        }
+                                    }
                                     CREATE_PROCESS_DEBUG_EVENT => {
                                         let info = event.u.CreateProcessInfo;
+                                        let new_pid = event.dwProcessId;
+                                        
+                                        if new_pid != injector_pid {
+                                            log(&format!("Child process detected (PID: {}). Detaching to bypass IFEO and allow normal execution...", new_pid));
+                                            // Detach immediately so the process runs free of the debugger
+                                            let _ = DebugActiveProcessStop(new_pid);
+                                            should_continue_event = false;
+                                        }
+
                                         if !info.hFile.is_invalid() { let _ = CloseHandle(info.hFile); }
                                         if !info.hProcess.is_invalid() { let _ = CloseHandle(info.hProcess); }
                                         if !info.hThread.is_invalid() { let _ = CloseHandle(info.hThread); }
+                                    }
+                                    EXCEPTION_DEBUG_EVENT => {
+                                        // Default to not handled for exceptions we don't explicitly want to swallow,
+                                        // though DBG_CONTINUE is usually fine for the initial breakpoint.
+                                        continue_status = DBG_CONTINUE;
                                     }
                                     LOAD_DLL_DEBUG_EVENT => {
                                         let info = event.u.LoadDll;
@@ -290,7 +308,9 @@ fn main() -> eframe::Result {
                                     _ => {}
                                 }
                                 
-                                let _ = ContinueDebugEvent(event.dwProcessId, event.dwThreadId, continue_status);
+                                if should_continue_event {
+                                    let _ = ContinueDebugEvent(event.dwProcessId, event.dwThreadId, continue_status);
+                                }
                             }
                         }
                     }
