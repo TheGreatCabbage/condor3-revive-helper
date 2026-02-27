@@ -6,8 +6,7 @@ AppVersion=0.1.0
 AppPublisher=TheGreatCabbage
 DefaultDirName={autopf}\Condor3 Revive Helper
 DefaultGroupName=Condor3 Revive Helper
-; Uncomment the following line to run in non administrative install mode (install for current user only.)
-;PrivilegesRequired=lowest
+PrivilegesRequired=admin
 OutputBaseFilename=Condor3ReviveHelper_Setup
 Compression=lzma
 SolidCompression=yes
@@ -26,6 +25,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "target\opt\gui.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "target\opt\Condor-VR-Configurer.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "target\opt\CondorVR.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "target\opt\CondorReviveHelperService.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
@@ -33,4 +33,8 @@ Name: "{group}\Condor3 Revive Helper"; Filename: "{app}\gui.exe"
 Name: "{autodesktop}\Condor3 Revive Helper"; Filename: "{app}\gui.exe"; Tasks: desktopicon
 
 [Run]
+Filename: "{app}\Condor-VR-Configurer.exe"; Parameters: "activate"; Flags: runascurrentuser runhidden
 Filename: "{app}\gui.exe"; Description: "{cm:LaunchProgram,Condor3 Revive Helper}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "{app}\Condor-VR-Configurer.exe"; Parameters: "deactivate"; Flags: runascurrentuser runhidden

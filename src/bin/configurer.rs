@@ -13,6 +13,7 @@ const TARGET_EXE: &str = "Condor.exe";
 const IFEO_PATH: &str =
     r#"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"#;
 const SERVICE_NAME: &str = "CondorReviveHelperService";
+const DEPRECATED_SERVICE_NAME: &str = "ReviveService";
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -27,6 +28,9 @@ fn main() -> io::Result<()> {
 
     match command.as_str() {
         "activate" => {
+            // Remove deprecated service if it exists
+            let _ = uninstall_service(DEPRECATED_SERVICE_NAME);
+
             let mut launcher_path = env::current_exe()?;
             launcher_path.pop();
             launcher_path.push("CondorVR.exe");
@@ -67,11 +71,14 @@ fn main() -> io::Result<()> {
                 println!("Hook deactivated.");
             }
 
-            if let Err(e) = uninstall_service() {
-                eprintln!("Failed to uninstall service: {}", e);
+            if let Err(e) = uninstall_service(SERVICE_NAME) {
+                eprintln!("Failed to uninstall {}: {}", SERVICE_NAME, e);
             } else {
-                println!("Service uninstalled.");
+                println!("Service {} uninstalled.", SERVICE_NAME);
             }
+
+            // Also ensure deprecated service is gone
+            let _ = uninstall_service(DEPRECATED_SERVICE_NAME);
         }
         _ => println!("Unknown command: {}", command),
     }
@@ -153,14 +160,14 @@ fn install_service(path: &str) -> Result<(), windows::core::Error> {
     }
 }
 
-fn uninstall_service() -> Result<(), windows::core::Error> {
+fn uninstall_service(name: &str) -> Result<(), windows::core::Error> {
     unsafe {
         let scm = OpenSCManagerW(None, None, SC_MANAGER_ALL_ACCESS)?;
         if scm.is_invalid() {
             return Err(windows::core::Error::from_thread());
         }
 
-        let service_name_w: Vec<u16> = SERVICE_NAME.encode_utf16().chain(Some(0)).collect();
+        let service_name_w: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
         let service = OpenServiceW(scm, PCWSTR(service_name_w.as_ptr()), SERVICE_ALL_ACCESS);
 
         if let Ok(service) = service {
