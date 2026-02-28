@@ -166,6 +166,18 @@ fn uninstall_service(name: &str) -> Result<(), windows::core::Error> {
         if let Ok(service) = service {
             let mut status = SERVICE_STATUS::default();
             let _ = ControlService(service, SERVICE_CONTROL_STOP, &mut status);
+
+            // Wait for service to stop
+            for _ in 0..50 {
+                let mut status = SERVICE_STATUS::default();
+                if QueryServiceStatus(service, &mut status).is_ok() {
+                    if status.dwCurrentState == SERVICE_STOPPED {
+                        break;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+
             let _ = DeleteService(service);
             let _ = CloseServiceHandle(service);
         }

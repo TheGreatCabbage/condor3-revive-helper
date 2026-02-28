@@ -9,7 +9,7 @@ indexmap = "2.13.0"
 winreg = "0.55"
 eframe = "0.33"
 chrono = { version = "0.4", optional = true }
-windows-service = "0.7"
+windows-service = "0.8"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security",

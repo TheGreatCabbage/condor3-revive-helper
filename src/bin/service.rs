@@ -1,5 +1,7 @@
 use std::env;
 use std::ffi::OsString;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use windows::Win32::Foundation::CloseHandle;
@@ -37,9 +39,15 @@ fn service_main(_arguments: Vec<OsString>) {
 }
 
 fn run_service() -> Result<(), Box<dyn std::error::Error>> {
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+
     let event_handler = move |control_event| -> ServiceControlHandlerResult {
         match control_event {
-            ServiceControl::Stop => ServiceControlHandlerResult::NoError,
+            ServiceControl::Stop => {
+                r.store(false, Ordering::SeqCst);
+                ServiceControlHandlerResult::NoError
+            }
             ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
             _ => ServiceControlHandlerResult::NotImplemented,
         }
@@ -71,13 +79,15 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
         process_id: None,
     })?;
 
-    // 2. Wait for Condor.exe
-    while !is_process_running(TARGET_EXE) {
+    // 2. Wait for Condor.exe or stop signal
+    while running.load(Ordering::SeqCst) && !is_process_running(TARGET_EXE) {
         thread::sleep(Duration::from_millis(500));
     }
 
-    // 3. Restore IFEO hook
-    let _ = restore_ifeo_hook();
+    // 3. Restore IFEO hook (only if we didn't stop early)
+    if running.load(Ordering::SeqCst) {
+        let _ = restore_ifeo_hook();
+    }
 
     status_handle.set_service_status(ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
