@@ -1,8 +1,8 @@
 [Setup]
 AppId={{1490D457-CF8A-4229-8ED4-BCEB2FCC1980}
 AppName=Condor3 Revive Helper
-AppVersion=0.2.0
-;AppVerName=Condor3 Revive Helper 0.2.0
+AppVersion=0.2.1
+;AppVerName=Condor3 Revive Helper 0.2.1
 AppPublisher=TheGreatCabbage
 DefaultDirName={autopf}\Condor3 Revive Helper
 DefaultGroupName=Condor3 Revive Helper

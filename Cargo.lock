@@ -646,7 +646,7 @@ dependencies = [
 
 [[package]]
 name = "condor3-revive-helper"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "eframe",
