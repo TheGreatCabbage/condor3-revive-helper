@@ -173,8 +173,8 @@ impl eframe::App for LauncherApp {
                 if self.is_manual {
                     ui.heading("Condor VR Helper");
                     ui.add_space(10.0);
-                    ui.label("This helper is ready and will automatically activate");
-                    ui.label("whenever you launch Condor from any shortcut.");
+                    ui.label("Whenever Condor is launched, it will open via this program");
+                    ui.label("as long as VR is enabled in the Condor3 Revive Helper.");
                     ui.add_space(20.0);
                 } else {
                     ui.heading("Starting Condor with VR...");
@@ -197,13 +197,18 @@ impl eframe::App for LauncherApp {
                 {
                     self.open_settings();
                 }
-                ui.add_space(10.0);
 
                 if self.is_manual {
-                    ui.add_space(10.0);
-                    if ui.button("Exit").clicked() {
+                    ui.add_space(15.0);
+                    if ui
+                        .add_sized([140.0, 32.0], egui::Button::new("Exit"))
+                        .clicked()
+                    {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
+                    ui.add_space(20.0);
+                } else {
+                    ui.add_space(10.0);
                 }
             });
         });
@@ -371,7 +376,7 @@ fn main() -> eframe::Result {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([400.0, 180.0])
+            .with_inner_size([400.0, if is_manual { 220.0 } else { 180.0 }])
             .with_always_on_top()
             .with_decorations(true)
             .with_close_button(!is_manual)
