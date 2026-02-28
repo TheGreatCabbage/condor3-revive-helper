@@ -40,10 +40,10 @@ If you want to build the project yourself, follow these steps:
 Run the following command in the project root to build the optimized release binaries:
 
 ```powershell
-cargo build --release
+cargo build --profile opt
 ```
 
-Then the main program can be launched from `target/release/gui.exe`. 
+Then the main program can be launched from `target/opt/gui.exe`. 
 
 ### 2. Create the installer (optional)
 If you have Inno Setup installed and iscc is in your system PATH, run:
