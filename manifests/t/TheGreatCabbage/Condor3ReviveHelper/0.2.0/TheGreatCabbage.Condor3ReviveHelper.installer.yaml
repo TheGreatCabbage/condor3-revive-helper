@@ -2,11 +2,11 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
 
 PackageIdentifier: TheGreatCabbage.Condor3ReviveHelper
-PackageVersion: 0.1.0
+PackageVersion: 0.2.0
 InstallerType: inno
 Installers:
 - Architecture: x64
-  InstallerUrl: https://github.com/TheGreatCabbage/condor3-revive-helper/releases/download/v0.1.0/Condor3ReviveHelper_Setup.exe
+  InstallerUrl: https://github.com/TheGreatCabbage/condor3-revive-helper/releases/download/v0.2.0/Condor3ReviveHelper_Setup.exe
   InstallerSha256: CC374913730A3893639F99FB7976444B18AE03839C2BB6399595E6DFDCC75E2E
 ManifestType: installer
 ManifestVersion: 1.10.0
