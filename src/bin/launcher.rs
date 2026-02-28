@@ -218,31 +218,6 @@ fn main() -> eframe::Result {
 
     let is_manual = args.len() < 2;
 
-    let mut lock_path = if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-        let mut p = std::path::PathBuf::from(local_app_data);
-        p.push("CondorVR");
-        let _ = std::fs::create_dir_all(&p);
-        p
-    } else {
-        // Fallback to current directory as a last resort, but don't unwrap
-        env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from(".")).parent().unwrap_or(Path::new(".")).to_path_buf()
-    };
-    lock_path.push("CondorVR_launch.lock");
-
-    let mut lock_error = None;
-    let mut lock_created = false;
-
-    if !is_manual {
-        if lock_path.exists() {
-            let msg = format!("Another launch is already in progress, or a previous launch failed.\n\nTo prevent an infinite loop, this launch has been blocked.\n\nIf you are sure no other instance is running, delete:\n{}", lock_path.display());
-            log(&format!("Blocker: {}", msg));
-            lock_error = Some(msg);
-        } else if let Ok(_) = std::fs::File::create(&lock_path) {
-            lock_created = true;
-            log("Lockfile created.");
-        }
-    }
-
     // Parse target path and game args
     let mut target_parts = Vec::new();
     let mut game_args = Vec::new();
@@ -270,11 +245,11 @@ fn main() -> eframe::Result {
     let state = Arc::new(LauncherState {
         progress: AtomicU32::new(0.0f32.to_bits()),
         finished: AtomicBool::new(false),
-        error_message: std::sync::Mutex::new(lock_error.clone()),
+        error_message: std::sync::Mutex::new(None),
     });
 
     let state_clone = Arc::clone(&state);
-    let handle = if !is_manual && lock_error.is_none() {
+    let handle = if !is_manual {
         Some(thread::spawn(move || {
             let mut revive_path = if let Ok(env_path) = env::var("C3_REVIVE_INJECTOR_PATH") {
                 env_path
@@ -411,11 +386,6 @@ fn main() -> eframe::Result {
         options,
         Box::new(|_cc| Ok(Box::new(LauncherApp::new(state, is_manual)))),
     );
-
-    if lock_created {
-        let _ = std::fs::remove_file(&lock_path);
-        log("Lockfile removed.");
-    }
 
     if let Some(h) = handle {
         let _ = h.join();
