@@ -7,6 +7,8 @@ AppPublisher=TheGreatCabbage
 DefaultDirName={autopf}\Condor3 Revive Helper
 DefaultGroupName=Condor3 Revive Helper
 PrivilegesRequired=admin
+ArchitecturesAllowed=x64
+ArchitecturesInstallIn64BitMode=x64
 OutputBaseFilename=Condor3ReviveHelper_Setup
 Compression=lzma
 SolidCompression=yes
@@ -33,10 +35,8 @@ Name: "{group}\Condor3 Revive Helper"; Filename: "{app}\gui.exe"
 Name: "{autodesktop}\Condor3 Revive Helper"; Filename: "{app}\gui.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\Condor-VR-Configurer.exe"; Parameters: "activate"; Flags: runascurrentuser runhidden
+Filename: "{app}\Condor-VR-Configurer.exe"; Parameters: "activate"; Flags: runhidden
 Filename: "{app}\gui.exe"; Description: "{cm:LaunchProgram,Condor3 Revive Helper}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-Filename: "{cmd}"; Parameters: "/C sc stop CondorReviveHelperService"; Flags: runascurrentuser runhidden; RunOnceId: "StopCondorReviveHelperService"
-Filename: "{cmd}"; Parameters: "/C sc delete CondorReviveHelperService"; Flags: runascurrentuser runhidden; RunOnceId: "DeleteCondorReviveHelperService"
-Filename: "{app}\Condor-VR-Configurer.exe"; Parameters: "deactivate"; Flags: runascurrentuser runhidden; RunOnceId: "DeactivateCondorVR"
+Filename: "{app}\Condor-VR-Configurer.exe"; Parameters: "deactivate"; Flags: runhidden; RunOnceId: "DeactivateCondorVR"
