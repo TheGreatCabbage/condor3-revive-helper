@@ -42,3 +42,9 @@ Filename: "{app}\gui.exe"; Description: "{cm:LaunchProgram,Condor3 Revive Helper
 
 [UninstallRun]
 Filename: "{app}\Condor-VR-Configurer.exe"; Parameters: "deactivate"; Flags: runhidden; RunOnceId: "DeactivateCondorVR"
+
+[Code]
+function UninstallNeedRestart(): Boolean;
+begin
+  Result := True;
+end;
