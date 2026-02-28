@@ -23,6 +23,7 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Services\CondorReviveHelperService
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "skip_registration"; Description: "Don't immediately register Condor to run via Revive"; GroupDescription: "Additional configuration:"; Flags: unchecked
 
 [Files]
 Source: "target\opt\gui.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -36,7 +37,7 @@ Name: "{group}\Condor3 Revive Helper"; Filename: "{app}\gui.exe"
 Name: "{autodesktop}\Condor3 Revive Helper"; Filename: "{app}\gui.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\Condor-VR-Configurer.exe"; Parameters: "activate"; Flags: runhidden
+Filename: "{app}\Condor-VR-Configurer.exe"; Parameters: "activate"; Tasks: not skip_registration; Flags: runhidden
 Filename: "{app}\gui.exe"; Description: "{cm:LaunchProgram,Condor3 Revive Helper}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
