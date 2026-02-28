@@ -39,6 +39,4 @@ Filename: "{app}\gui.exe"; Description: "{cm:LaunchProgram,Condor3 Revive Helper
 [UninstallRun]
 Filename: "{cmd}"; Parameters: "/C sc stop CondorReviveHelperService"; Flags: runascurrentuser runhidden; RunOnceId: "StopCondorReviveHelperService"
 Filename: "{cmd}"; Parameters: "/C sc delete CondorReviveHelperService"; Flags: runascurrentuser runhidden; RunOnceId: "DeleteCondorReviveHelperService"
-Filename: "{cmd}"; Parameters: "/C sc stop ReviveService"; Flags: runascurrentuser runhidden; RunOnceId: "StopReviveService"
-Filename: "{cmd}"; Parameters: "/C sc delete ReviveService"; Flags: runascurrentuser runhidden; RunOnceId: "DeleteReviveService"
 Filename: "{app}\Condor-VR-Configurer.exe"; Parameters: "deactivate"; Flags: runascurrentuser runhidden; RunOnceId: "DeactivateCondorVR"
