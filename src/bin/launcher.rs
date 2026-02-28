@@ -88,20 +88,26 @@ fn log(msg: &str) {
 
     #[cfg(feature = "logging")]
     {
-        let mut log_path = env::current_exe().unwrap();
-        log_path.pop();
+        let mut log_path = if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            let mut p = std::path::PathBuf::from(local_app_data);
+            p.push("CondorVR");
+            let _ = std::fs::create_dir_all(&p);
+            p
+        } else {
+            return;
+        };
         log_path.push("CondorVR_log.txt");
 
-        let mut file = OpenOptions::new()
+        if let Ok(mut file) = OpenOptions::new()
             .create(true)
             .append(true)
             .open(log_path)
-            .unwrap();
-
-        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-        let line = format!("[{}] {}\n", timestamp, msg);
-        let _ = file.write_all(line.as_bytes());
-        let _ = file.flush();
+        {
+            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+            let line = format!("[{}] {}\n", timestamp, msg);
+            let _ = file.write_all(line.as_bytes());
+            let _ = file.flush();
+        }
     }
 }
 
@@ -212,8 +218,15 @@ fn main() -> eframe::Result {
 
     let is_manual = args.len() < 2;
 
-    let mut lock_path = env::current_exe().unwrap();
-    lock_path.pop();
+    let mut lock_path = if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+        let mut p = std::path::PathBuf::from(local_app_data);
+        p.push("CondorVR");
+        let _ = std::fs::create_dir_all(&p);
+        p
+    } else {
+        // Fallback to current directory as a last resort, but don't unwrap
+        env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from(".")).parent().unwrap_or(Path::new(".")).to_path_buf()
+    };
     lock_path.push("CondorVR_launch.lock");
 
     let mut lock_error = None;
@@ -221,7 +234,7 @@ fn main() -> eframe::Result {
 
     if !is_manual {
         if lock_path.exists() {
-            let msg = "Another launch is already in progress, or a previous launch failed.\n\nTo prevent an infinite loop, this launch has been blocked.\n\nIf you are sure no other instance is running, delete:\nCondorVR_launch.lock".to_string();
+            let msg = format!("Another launch is already in progress, or a previous launch failed.\n\nTo prevent an infinite loop, this launch has been blocked.\n\nIf you are sure no other instance is running, delete:\n{}", lock_path.display());
             log(&format!("Blocker: {}", msg));
             lock_error = Some(msg);
         } else if let Ok(_) = std::fs::File::create(&lock_path) {
