@@ -32,33 +32,45 @@ fn main() -> io::Result<()> {
             launcher_path.push("CondorVR.exe");
             let launcher_path_str = launcher_path.to_str().expect("Invalid path");
 
-            let (target_key, _) =
-                hklm.create_subkey_with_flags(&target_key_path, KEY_ALL_ACCESS)?;
-            let launcher_command = format!("\"{}\"", launcher_path_str);
-            target_key.set_value("Debugger", &launcher_command)?;
-            println!("Hook activated with: {}", launcher_command);
-
             // Install or update Service
             let mut service_path = env::current_exe()?;
             service_path.pop();
             service_path.push(format!("{SERVICE_NAME}.exe"));
             let service_path_str = service_path.to_str().expect("Invalid path");
 
+            let mut service_ok = false;
             match install_service(service_path_str) {
-                Ok(_) => println!("Service installed."),
+                Ok(_) => {
+                    println!("Service installed.");
+                    service_ok = true;
+                }
                 Err(e) if e.code() == ERROR_SERVICE_EXISTS.to_hresult() => {
                     println!("Service already exists, updating configuration...");
                     if let Err(e) = update_service_config(service_path_str) {
                         eprintln!("Failed to update service config: {}", e);
+                    } else {
+                        service_ok = true;
                     }
                 }
                 Err(e) => eprintln!("Failed to install service: {}", e),
             }
 
-            if let Err(e) = allow_everyone_to_start_service() {
-                eprintln!("Failed to set service permissions: {}", e);
+            if service_ok {
+                if let Err(e) = allow_everyone_to_start_service() {
+                    eprintln!("Failed to set service permissions: {}", e);
+                } else {
+                    println!("Service permissions set.");
+                }
+
+                let (target_key, _) =
+                    hklm.create_subkey_with_flags(&target_key_path, KEY_ALL_ACCESS)?;
+                let launcher_command = format!("\"{}\"", launcher_path_str);
+                target_key.set_value("Debugger", &launcher_command)?;
+                println!("Hook activated with: {}", launcher_command);
             } else {
-                println!("Service permissions set.");
+                eprintln!("Error: VR support could not be activated because the helper service could not be installed.");
+                eprintln!("This often happens if you recently uninstalled and haven't restarted yet.");
+                eprintln!("Please restart your computer and try again.");
             }
         }
         "deactivate" => {

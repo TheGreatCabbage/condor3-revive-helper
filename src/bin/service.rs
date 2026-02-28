@@ -67,7 +67,18 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
 
     // Core logic
     // 1. Delete IFEO hook
-    let _ = delete_ifeo_hook();
+    if let Err(e) = delete_ifeo_hook() {
+        status_handle.set_service_status(ServiceStatus {
+            service_type: ServiceType::OWN_PROCESS,
+            current_state: windows_service::service::ServiceState::Stopped,
+            controls_accepted: windows_service::service::ServiceControlAccept::empty(),
+            exit_code: windows_service::service::ServiceExitCode::Win32(1),
+            checkpoint: 0,
+            wait_hint: Duration::default(),
+            process_id: None,
+        })?;
+        return Err(e);
+    }
 
     status_handle.set_service_status(ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
@@ -109,7 +120,7 @@ fn delete_ifeo_hook() -> Result<(), Box<dyn std::error::Error>> {
         let subkey_wide: Vec<u16> = subkey_path.encode_utf16().chain(Some(0)).collect();
 
         let mut hkey = Default::default();
-        let _ = RegCreateKeyExW(
+        let res = RegCreateKeyExW(
             hklm,
             windows::core::PCWSTR(subkey_wide.as_ptr()),
             None,
@@ -121,10 +132,18 @@ fn delete_ifeo_hook() -> Result<(), Box<dyn std::error::Error>> {
             None,
         );
 
+        if res != windows::Win32::Foundation::ERROR_SUCCESS {
+            return Err(format!("RegCreateKeyExW failed with code: {}", res.0).into());
+        }
+
         if !hkey.is_invalid() {
             let value_name: Vec<u16> = "Debugger".encode_utf16().chain(Some(0)).collect();
-            let _ = RegDeleteValueW(hkey, windows::core::PCWSTR(value_name.as_ptr()));
+            let res = RegDeleteValueW(hkey, windows::core::PCWSTR(value_name.as_ptr()));
             let _ = windows::Win32::System::Registry::RegCloseKey(hkey);
+
+            if res != windows::Win32::Foundation::ERROR_SUCCESS && res != windows::Win32::Foundation::ERROR_FILE_NOT_FOUND {
+                return Err(format!("RegDeleteValueW failed with code: {}", res.0).into());
+            }
         }
     }
     Ok(())

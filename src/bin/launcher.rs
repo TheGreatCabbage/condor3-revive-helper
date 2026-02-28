@@ -16,6 +16,7 @@ use std::{thread, time::Duration, time::Instant};
 
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Services::*;
+use windows::Win32::System::Registry::*;
 use windows::core::PCWSTR;
 
 use eframe::egui;
@@ -69,17 +70,67 @@ fn trigger_bypass_service() -> Result<(), Box<dyn std::error::Error>> {
             if QueryServiceStatus(service, &mut status).is_ok() {
                 if status.dwCurrentState == SERVICE_RUNNING {
                     log("Service is now running.");
-                    // Give it a tiny bit more time to ensure the hook is actually deleted
-                    thread::sleep(Duration::from_millis(200));
+                    break;
+                } else if status.dwCurrentState == SERVICE_STOPPED {
+                    log("Service stopped unexpectedly.");
                     break;
                 }
             }
             thread::sleep(Duration::from_millis(100));
         }
 
+        // Now explicitly wait for the IFEO hook (registry key) to be deleted
+        let hook_wait = Instant::now();
+        while hook_wait.elapsed() < timeout {
+            if !is_ifeo_hook_present() {
+                log("IFEO hook confirmed deleted.");
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        if is_ifeo_hook_present() {
+            log("Error: IFEO hook still present after timeout.");
+            let _ = CloseServiceHandle(service);
+            let _ = CloseServiceHandle(scm);
+            return Err("IFEO hook could not be removed. Please ensure the CondorReviveHelperService is running or restart your computer.".into());
+        }
+
         let _ = CloseServiceHandle(service);
         let _ = CloseServiceHandle(scm);
         Ok(())
+    }
+}
+
+fn is_ifeo_hook_present() -> bool {
+    unsafe {
+        let hklm = HKEY_LOCAL_MACHINE;
+        let subkey_path = r"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\Condor.exe";
+        let subkey_wide: Vec<u16> = subkey_path.encode_utf16().chain(Some(0)).collect();
+
+        let mut hkey = HKEY::default();
+        if RegOpenKeyExW(
+            hklm,
+            PCWSTR(subkey_wide.as_ptr()),
+            None,
+            KEY_READ,
+            &mut hkey,
+        ) != ERROR_SUCCESS {
+            return false;
+        }
+
+        let value_name: Vec<u16> = "Debugger".encode_utf16().chain(Some(0)).collect();
+        let res = RegQueryValueExW(
+            hkey,
+            PCWSTR(value_name.as_ptr()),
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let _ = RegCloseKey(hkey);
+        res == ERROR_SUCCESS
     }
 }
 
@@ -284,7 +335,10 @@ fn main() -> eframe::Result {
             // Trigger the CondorReviveHelperService to bypass IFEO
             log("Triggering CondorReviveHelperService to bypass IFEO...");
             if let Err(e) = trigger_bypass_service() {
-                log(&format!("Warning: Failed to trigger bypass service: {}. Launch may fail if IFEO is active.", e));
+                let msg = format!("Failed to bypass IFEO: {}. This can happen if you recently reinstalled and haven't restarted, or if the helper service is disabled. Please restart your computer to resolve this.", e);
+                log(&format!("Error: {}", msg));
+                *state_clone.error_message.lock().unwrap() = Some(msg);
+                return; // Stop on error
             } else {
                 log("Bypass service triggered.");
             }
