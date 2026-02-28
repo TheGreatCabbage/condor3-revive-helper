@@ -11,7 +11,9 @@ A lightweight utility for Condor 3, to enable VR support via Revive more easily.
 
 ### Installation
 1. Download the latest `Condor3ReviveHelper_Setup.exe` from the [Releases](https://github.com/TheGreatCabbage/condor3-revive-helper/releases) page.
-2. Run the installer and follow the on-screen instructions.
+    - In some browsers like Edge you may get severe warnings. This is because the program is new and because it's too expensive to get a signing certificate. There's always an option to continue anyway, although it may not be obvious. You might also get a smartscreen dialog when trying to run the setup, which again has a small option to continue (probably under "More info").
+2. Run the installer and follow the on-screen instructions. 
+    - **Important**: If you get an error referring to `VCRUNTIME140.dll` at this point, or when trying to launch the program, install the VC redistributables from the [official Microsoft site](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170#latest-supported-redistributable-version).
 3. A shortcut for Condor3 Revive Helper will be created on your Desktop and in your Start Menu, which allows you to open the window shown above.
 
 > [!note]
