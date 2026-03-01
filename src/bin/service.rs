@@ -1,3 +1,7 @@
+//! This service allows the IFEO registry key, which makes Condor.exe defer to our launcher, to be 
+//! deleted while the launcher runs and then re-enabled after Condor is launched via ReviveInjector. 
+//! This prevents an infinite loop of the launcher being executed. 
+
 use std::env;
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, Ordering};
