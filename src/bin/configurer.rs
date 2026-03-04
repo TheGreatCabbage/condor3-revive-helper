@@ -17,7 +17,12 @@ const SERVICE_NAME: &str = "CondorReviveHelperService";
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        println!("Usage: Condor-VR-Configurer.exe [activate|deactivate]");
+        println!("Usage: Condor-VR-Configurer.exe [activate|deactivate|--version]");
+        return Ok(());
+    }
+
+    if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
+        println!("Condor-VR-Configurer version {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
 

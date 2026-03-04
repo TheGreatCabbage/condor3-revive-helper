@@ -7,6 +7,7 @@ use std::env;
 use std::process::Command;
 use winreg::RegKey;
 use winreg::enums::*;
+use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 
 // The name of the Condor executable.
 const TARGET_EXE: &str = "Condor.exe";
@@ -16,6 +17,15 @@ const IFEO_PATH: &str =
     r#"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"#;
 
 fn main() -> eframe::Result {
+    let args: Vec<String> = env::args().collect();
+    if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
+        unsafe {
+            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+        println!("Condor3 Revive Helper version {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([450.0, 280.0]),
         ..Default::default()

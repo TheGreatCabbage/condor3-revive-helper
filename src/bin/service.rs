@@ -33,6 +33,12 @@ const IFEO_PATH: &str =
 define_windows_service!(ffi_service_main, service_main);
 
 fn main() -> Result<(), windows_service::Error> {
+    let args: Vec<String> = env::args().collect();
+    if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
+        println!("CondorReviveHelperService version {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     service_dispatcher::start(SERVICE_NAME, ffi_service_main)
 }
 
