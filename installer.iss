@@ -13,6 +13,7 @@ OutputBaseFilename=Condor3ReviveHelper_Setup
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
+DisableDirPage=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
