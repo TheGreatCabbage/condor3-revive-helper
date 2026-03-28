@@ -146,7 +146,19 @@ fn update_service_config(path: &str) -> Result<(), windows::core::Error> {
     unsafe {
         let scm = OpenSCManagerW(None, None, SC_MANAGER_ALL_ACCESS)?;
         let service_name_w: Vec<u16> = SERVICE_NAME.encode_utf16().chain(Some(0)).collect();
-        let service = OpenServiceW(scm, PCWSTR(service_name_w.as_ptr()), SERVICE_CHANGE_CONFIG)?;
+        let mut service_res =
+            OpenServiceW(scm, PCWSTR(service_name_w.as_ptr()), SERVICE_CHANGE_CONFIG);
+
+        if let Err(ref e) = service_res {
+            if e.code() == ERROR_ACCESS_DENIED.to_hresult() {
+                // Try to fix permissions and then try again
+                let _ = allow_everyone_to_start_service();
+                service_res =
+                    OpenServiceW(scm, PCWSTR(service_name_w.as_ptr()), SERVICE_CHANGE_CONFIG);
+            }
+        }
+
+        let service = service_res?;
 
         let service_path_w: Vec<u16> = format!("\"{}\"", path)
             .encode_utf16()
@@ -224,9 +236,18 @@ fn uninstall_service(name: &str) -> Result<(), windows::core::Error> {
         }
 
         let service_name_w: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
-        let service = OpenServiceW(scm, PCWSTR(service_name_w.as_ptr()), SERVICE_ALL_ACCESS);
+        let mut service_res =
+            OpenServiceW(scm, PCWSTR(service_name_w.as_ptr()), SERVICE_ALL_ACCESS);
 
-        if let Ok(service) = service {
+        if let Err(ref e) = service_res {
+            if e.code() == ERROR_ACCESS_DENIED.to_hresult() {
+                // Try to fix permissions and then try again
+                let _ = allow_everyone_to_start_service();
+                service_res = OpenServiceW(scm, PCWSTR(service_name_w.as_ptr()), SERVICE_ALL_ACCESS);
+            }
+        }
+
+        if let Ok(service) = service_res {
             let mut status = SERVICE_STATUS::default();
             let _ = ControlService(service, SERVICE_CONTROL_STOP, &mut status);
 
@@ -257,10 +278,11 @@ fn allow_everyone_to_start_service() -> Result<(), windows::core::Error> {
         // WRITE_DAC (0x00040000) is required to set security
         let service = OpenServiceW(scm, PCWSTR(service_name_w.as_ptr()), 0x00040000)?;
 
-        // SDDL for "Allow Everyone (WD) Start (RP), Stop (WP), and Query Status (LC)"
-        // D: - DACL
-        // (A;;RPWPLC;;;WD) - Allow; ; Start+Stop+QueryStatus; ; ; Everyone
-        let sddl = "D:(A;;RPWPLC;;;WD)";
+        // SDDL for:
+        // - Local System (SY): Generic All (GA)
+        // - Built-in Administrators (BA): Generic All (GA)
+        // - Everyone (WD): Start (RP) and Query Status (LC)
+        let sddl = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;RPLC;;;WD)";
         let sddl_w: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();
 
         let mut p_sd: PSECURITY_DESCRIPTOR = PSECURITY_DESCRIPTOR::default();
