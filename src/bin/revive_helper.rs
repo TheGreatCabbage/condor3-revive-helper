@@ -8,9 +8,25 @@ use std::process::Command;
 use winreg::RegKey;
 use winreg::enums::*;
 use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+use directories::UserDirs;
+use std::path::{PathBuf};
+use ini::Ini;
+use windows::core::HSTRING;
+use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONERROR};
 
 // The name of the Condor executable.
 const TARGET_EXE: &str = "Condor.exe";
+
+fn show_error(msg: &str) {
+    unsafe {
+        let _ = MessageBoxW(
+            None,
+            &HSTRING::from(msg),
+            &HSTRING::from("Error"),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
 
 // The registry path at which we can create a hook which will cause Conder.exe to open our launcher instead.
 const IFEO_PATH: &str =
@@ -27,7 +43,7 @@ fn main() -> eframe::Result {
     }
 
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([450.0, 280.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([500.0, 450.0]),
         ..Default::default()
     };
     eframe::run_native(
@@ -37,8 +53,15 @@ fn main() -> eframe::Result {
     )
 }
 
+struct PilotStatus {
+    name: String,
+    path: PathBuf,
+    vr_enabled: bool,
+}
+
 struct ReviveHelperApp {
     is_active: bool,
+    pilots: Vec<PilotStatus>,
     status_msg: String,
 }
 
@@ -46,6 +69,7 @@ impl Default for ReviveHelperApp {
     fn default() -> Self {
         let mut slf = Self {
             is_active: false,
+            pilots: Vec::new(),
             status_msg: "Initializing...".to_string(),
         };
         slf.refresh_status();
@@ -69,21 +93,99 @@ impl ReviveHelperApp {
             Ok(key) => match key.get_value::<String, _>("Debugger") {
                 Ok(_) => {
                     self.is_active = true;
-                    self.status_msg = "Condor will launch with VR enabled.".to_string();
+                    self.status_msg = "Condor will launch with Revive.".to_string();
                 }
                 Err(_) => {
                     self.is_active = false;
-                    self.status_msg = "Condor will launch with VR disabled.".to_string();
+                    self.status_msg = "Condor will launch without Revive.".to_string();
                 }
             },
             Err(_) => {
                 self.is_active = false;
-                self.status_msg = "Condor will launch with VR disabled.".to_string();
+                self.status_msg = "Condor will launch without Revive.".to_string();
+            }
+        }
+
+        // Pilot status
+        self.pilots.clear();
+        if let Some(user_dirs) = UserDirs::new() {
+            if let Some(docs) = user_dirs.document_dir() {
+                for condor_dir in &["Condor", "Condor3"] {
+                    let base_dir = docs.join(condor_dir);
+                    
+                    // Check global Setup.ini
+                    let global_setup = base_dir.join("Setup.ini");
+                    if global_setup.exists() {
+                        let mut vr_enabled = false;
+                        if let Ok(conf) = Ini::load_from_file(&global_setup) {
+                            if let Some(section) = conf.section(Some("Graphics")) {
+                                if let Some(val) = section.get("VROculusRift") {
+                                    vr_enabled = val.trim() == "1";
+                                }
+                            }
+                        }
+                        self.pilots.push(PilotStatus {
+                            name: format!("Global Settings ({})", condor_dir),
+                            path: global_setup,
+                            vr_enabled,
+                        });
+                    }
+
+                    // Check pilots
+                    let pilots_dir = base_dir.join("Pilots");
+                    if let Ok(entries) = std::fs::read_dir(pilots_dir) {
+                        for entry in entries.flatten() {
+                            if entry.path().is_dir() {
+                                let pilot_name = entry.file_name().to_string_lossy().into_owned();
+                                let setup_ini = entry.path().join("Setup.ini");
+                                if setup_ini.exists() {
+                                    let mut vr_enabled = false;
+                                    if let Ok(conf) = Ini::load_from_file(&setup_ini) {
+                                        if let Some(section) = conf.section(Some("Graphics")) {
+                                            if let Some(val) = section.get("VROculusRift") {
+                                                vr_enabled = val.trim() == "1";
+                                            }
+                                        }
+                                    }
+                                    self.pilots.push(PilotStatus {
+                                        name: format!("Pilot: {} ({})", pilot_name, condor_dir),
+                                        path: setup_ini,
+                                        vr_enabled,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
     fn toggle_hook(&mut self) {
+        // Refresh status first to ensure we have the latest pilot list and hook state
+        self.refresh_status();
+
+        // Determine new VR value for Setup.ini files
+        let new_vr_val = if self.is_active { "0" } else { "1" };
+        
+        // First, toggle INI files for all pilots and global settings
+        for pilot in &self.pilots {
+            let mut conf = match Ini::load_from_file(&pilot.path) {
+                Ok(c) => c,
+                Err(_) => {
+                    continue;
+                }
+            };
+            
+            // Set VROculusRift to the target value in the Graphics section
+            conf.with_section(Some("Graphics"))
+                .set("VROculusRift", new_vr_val);
+
+            if let Err(e) = conf.write_to_file(&pilot.path) {
+                show_error(&format!("Failed to write to {}: {}", pilot.path.display(), e));
+            }
+        }
+
         if let Some(setup_path) = self.get_setup_path() {
             let action = if self.is_active {
                 "deactivate"
@@ -140,14 +242,37 @@ impl eframe::App for ReviveHelperApp {
             
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                ui.label("Current status: Condor will launch with VR ");
+                ui.label("Current status: Condor will launch ");
                 if self.is_active {
-                    ui.label(egui::RichText::new("enabled").color(egui::Color32::GREEN));
+                    ui.label(egui::RichText::new("with Revive").color(egui::Color32::GREEN));
                 } else {
-                    ui.label(egui::RichText::new("disabled").color(egui::Color32::RED));
+                    ui.label(egui::RichText::new("without Revive").color(egui::Color32::RED));
                 }
                 ui.label(".");
             });
+            ui.add_space(10.0);
+
+            ui.group(|ui| {
+                ui.set_min_height(100.0);
+                ui.label(egui::RichText::new("Condor Settings & Pilots:").strong());
+                if self.pilots.is_empty() {
+                    ui.label(egui::RichText::new("No Setup.ini files found in Documents/Condor or Documents/Condor3.").weak());
+                } else {
+                    egui::ScrollArea::vertical().id_salt("pilot_scroll").show(ui, |ui| {
+                        for pilot in &self.pilots {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{}:", pilot.name));
+                                if pilot.vr_enabled {
+                                    ui.label(egui::RichText::new("VR Enabled").color(egui::Color32::GREEN));
+                                } else {
+                                    ui.label(egui::RichText::new("VR Disabled").color(egui::Color32::RED));
+                                }
+                            });
+                        }
+                    });
+                }
+            });
+
             ui.add_space(10.0);
 
             let button_text = if self.is_active { "Disable VR" } else { "Enable VR" };
@@ -155,7 +280,7 @@ impl eframe::App for ReviveHelperApp {
                 self.toggle_hook();
             }
             ui.add_space(10.0);
-            ui.label(egui::RichText::new("Tip: Toggling the VR setting will open a permission dialog.").weak());
+            ui.label(egui::RichText::new("Tip: Toggling the VR setting will open a permission dialog and update all pilots' Setup.ini.").weak());
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::RIGHT), |ui| {
                 ui.add_space(10.0);
