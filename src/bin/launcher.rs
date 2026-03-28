@@ -22,8 +22,9 @@ use windows::core::PCWSTR;
 
 use eframe::egui;
 
-use windows::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
-use windows::Win32::Security::{DACL_SECURITY_INFORMATION, ACCESS_MASK, ACCESS_ALLOWED_ACE, ACL, ACE_HEADER};
+use windows::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT, ConvertSidToStringSidW};
+use windows::Win32::Security::{DACL_SECURITY_INFORMATION, ACCESS_ALLOWED_ACE, ACE_HEADER};
+use windows::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 
 fn read_env_var_from_file(var_name: &str) -> Option<String> {
     if let Ok(mut exe_path) = env::current_exe() {
@@ -57,8 +58,8 @@ fn read_env_var_from_file(var_name: &str) -> Option<String> {
 fn has_strict_permissions(path: &Path) -> bool {
     unsafe {
         let path_w: Vec<u16> = path.to_str().unwrap_or("").encode_utf16().chain(Some(0)).collect();
-        let mut p_psid_owner = std::ptr::null_mut();
-        let mut p_psid_group = std::ptr::null_mut();
+        let mut p_psid_owner = windows::Win32::Security::PSID::default();
+        let mut p_psid_group = windows::Win32::Security::PSID::default();
         let mut p_dacl = std::ptr::null_mut();
         let mut p_security_descriptor = windows::Win32::Security::PSECURITY_DESCRIPTOR::default();
 
@@ -99,7 +100,7 @@ fn has_strict_permissions(path: &Path) -> bool {
             if windows::Win32::Security::GetAce(p_dacl, i, &mut p_ace).is_ok() {
                 let header = &*(p_ace as *const ACE_HEADER);
                 // We only care about Access Allowed ACEs for this check
-                if header.AceType == windows::Win32::Security::ACCESS_ALLOWED_ACE_TYPE {
+                if header.AceType as u32 == ACCESS_ALLOWED_ACE_TYPE {
                     let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
                     let mask = ace.Mask;
                     
@@ -113,7 +114,7 @@ fn has_strict_permissions(path: &Path) -> bool {
                         // S-1-5-11 (Authenticated Users)
                         // S-1-5-32-545 (Users)
                         let mut sid_string = windows::core::PWSTR::null();
-                        if windows::Win32::Security::ConvertSidToStringSidW(sid, &mut sid_string).is_ok() {
+                        if ConvertSidToStringSidW(windows::Win32::Security::PSID(sid as *mut _), &mut sid_string).is_ok() {
                             let s = String::from_utf16_lossy(sid_string.as_wide());
                             let _ = LocalFree(Some(HLOCAL(sid_string.0 as *mut _)));
                             
@@ -252,15 +253,24 @@ fn log(msg: &str) {
 
     #[cfg(feature = "logging")]
     {
-        let mut log_path = if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-            let mut p = std::path::PathBuf::from(local_app_data);
-            p.push("CondorVR");
-            let _ = std::fs::create_dir_all(&p);
-            p
+        let log_dir = if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            std::path::PathBuf::from(local_app_data).join("CondorVR")
         } else {
             return;
         };
-        log_path.push("CondorVR_log.txt");
+
+        if log_dir.exists() {
+            if !condor3_revive_helper::is_safe_path(&log_dir) {
+                return; // Don't log to unsafe directory
+            }
+        } else {
+            let _ = std::fs::create_dir_all(&log_dir);
+        }
+
+        let log_path = log_dir.join("CondorVR_log.txt");
+        if log_path.exists() && !condor3_revive_helper::is_safe_path(&log_path) {
+            return;
+        }
 
         if let Ok(mut file) = OpenOptions::new()
             .create(true)

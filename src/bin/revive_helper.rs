@@ -186,13 +186,7 @@ impl ReviveHelperApp {
             };
 
             // Use secure log path in ProgramData
-            let mut log_path = if let Some(pd) = env::var_os("ProgramData") {
-                PathBuf::from(pd)
-            } else {
-                PathBuf::from("C:\\ProgramData")
-            };
-            log_path.push("CondorVR");
-            log_path.push("setup.log");
+            let log_path = condor3_revive_helper::get_secure_log_path("CondorVR", "setup.log");
 
             // Use native Windows API ShellExecuteExW to trigger UAC elevation
             let mut sei = SHELLEXECUTEINFOW::default();

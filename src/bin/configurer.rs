@@ -33,15 +33,7 @@ fn find_revive_injector() -> Option<String> {
 }
 
 fn get_secure_log_path() -> PathBuf {
-    let mut path = if let Some(pd) = env::var_os("ProgramData") {
-        PathBuf::from(pd)
-    } else {
-        PathBuf::from("C:\\ProgramData")
-    };
-    path.push("CondorVR");
-    let _ = std::fs::create_dir_all(&path);
-    path.push("setup.log");
-    path
+    condor3_revive_helper::get_secure_log_path("CondorVR", "setup.log")
 }
 
 struct Logger {
