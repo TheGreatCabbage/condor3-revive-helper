@@ -14,7 +14,23 @@ use windows::Win32::System::Services::*;
 const TARGET_EXE: &str = "Condor.exe";
 const IFEO_PATH: &str =
     r#"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"#;
+const SETTINGS_PATH: &str = r#"Software\CondorVR"#;
 const SERVICE_NAME: &str = "CondorReviveHelperService";
+
+fn find_revive_injector() -> Option<String> {
+    let fallbacks = [
+        r#"C:\Program Files\Revive\Revive\ReviveInjector.exe"#,
+        r#"C:\Program Files\Revive\Revive\x64\ReviveInjector.exe"#,
+        r#"C:\Program Files\Revive\ReviveInjector.exe"#,
+    ];
+
+    for fallback in fallbacks {
+        if std::path::Path::new(fallback).exists() {
+            return Some(fallback.to_string());
+        }
+    }
+    None
+}
 
 fn get_secure_log_path() -> PathBuf {
     let mut path = if let Some(pd) = env::var_os("ProgramData") {
@@ -125,6 +141,16 @@ fn run_command(command: &str, logger: &mut Logger) -> io::Result<()> {
                 let launcher_command = format!("\"{}\"", launcher_path_str);
                 target_key.set_value("Debugger", &launcher_command)?;
                 logger.log(&format!("Hook activated with: {}", launcher_command));
+
+                // Store ReviveInjector path in HKLM/Software/CondorVR
+                if let Some(revive_path) = find_revive_injector() {
+                    if let Ok((settings_key, _)) = hklm.create_subkey_with_flags(SETTINGS_PATH, KEY_ALL_ACCESS) {
+                        let _ = settings_key.set_value("ReviveInjectorPath", &revive_path);
+                        logger.log(&format!("Stored ReviveInjector path: {}", revive_path));
+                    }
+                } else {
+                    logger.error("Warning: ReviveInjector.exe not found. You may need to install Revive.");
+                }
             } else {
                 logger.error("Error: VR support could not be activated because the helper service could not be installed.");
                 logger.error("This often happens if you recently uninstalled and haven't restarted yet.");

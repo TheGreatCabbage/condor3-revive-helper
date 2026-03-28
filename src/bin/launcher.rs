@@ -23,6 +23,7 @@ use windows::core::PCWSTR;
 use eframe::egui;
 
 const BYPASS_SERVICE_NAME: &str = "CondorReviveHelperService";
+const SETTINGS_PATH: &str = r#"Software\CondorVR"#;
 
 fn trigger_bypass_service() -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
@@ -316,25 +317,58 @@ fn main() -> eframe::Result {
     let state_clone = Arc::clone(&state);
     let handle = if !is_manual {
         Some(thread::spawn(move || {
-            let mut revive_path = if let Ok(env_path) = env::var("C3_REVIVE_INJECTOR_PATH") {
-                env_path
-            } else {
-                r#"C:\Program Files\Revive\Revive\ReviveInjector.exe"#.to_string()
-            };
+            // Priority 1: Check HKLM Registry (Secure)
+            let mut revive_path = None;
+            unsafe {
+                let mut hkey = HKEY::default();
+                let subkey_wide: Vec<u16> = SETTINGS_PATH.encode_utf16().chain(Some(0)).collect();
+                if RegOpenKeyExW(HKEY_LOCAL_MACHINE, PCWSTR(subkey_wide.as_ptr()), None, KEY_READ, &mut hkey) == ERROR_SUCCESS {
+                    let value_name: Vec<u16> = "ReviveInjectorPath".encode_utf16().chain(Some(0)).collect();
+                    let mut buffer = [0u16; 512];
+                    let mut size = (buffer.len() * 2) as u32;
+                    if RegQueryValueExW(hkey, PCWSTR(value_name.as_ptr()), None, None, Some(buffer.as_mut_ptr() as *mut u8), Some(&mut size)) == ERROR_SUCCESS {
+                        revive_path = Some(String::from_utf16_lossy(&buffer[..((size / 2) as usize - 1)]));
+                    }
+                    let _ = RegCloseKey(hkey);
+                }
+            }
 
-            if env::var("C3_REVIVE_INJECTOR_PATH").is_err() && !Path::new(&revive_path).exists() {
+            // Priority 2: Fallbacks (Hardcoded trusted paths)
+            if revive_path.is_none() {
                 let fallbacks = [
+                    r#"C:\Program Files\Revive\Revive\ReviveInjector.exe"#,
                     r#"C:\Program Files\Revive\Revive\x64\ReviveInjector.exe"#,
                     r#"C:\Program Files\Revive\ReviveInjector.exe"#,
                 ];
-
                 for fallback in fallbacks {
                     if Path::new(fallback).exists() {
-                        revive_path = fallback.to_string();
+                        revive_path = Some(fallback.to_string());
                         break;
                     }
                 }
             }
+
+            // Priority 3: Environment Variable (Least Secure, needs strict validation)
+            if revive_path.is_none() {
+                if let Ok(env_path) = env::var("C3_REVIVE_INJECTOR_PATH") {
+                    // Path Validation: Must be rooted in C:\Program Files\Revive
+                    if env_path.to_lowercase().starts_with(r"c:\program files\revive") {
+                        revive_path = Some(env_path);
+                    } else {
+                        log("Warning: C3_REVIVE_INJECTOR_PATH ignored because it is not in a trusted directory.");
+                    }
+                }
+            }
+
+            let revive_path = match revive_path {
+                Some(p) => p,
+                None => {
+                    let msg = "Revive Injector not found. Please ensure Revive is installed in Program Files.".to_string();
+                    log(&format!("Error: {}", msg));
+                    *state_clone.error_message.lock().unwrap() = Some(msg);
+                    return;
+                }
+            };
 
             log(&format!("Intercepted launch of: {}", target_path));
 
@@ -408,6 +442,7 @@ fn main() -> eframe::Result {
                     }
                 }
             } else {
+                // Already checked path existence, but good for completeness.
                 let msg = format!("Revive Injector not found at {}", revive_path);
                 log(&format!("Error: {}", msg));
                 *state_clone.error_message.lock().unwrap() = Some(msg);
