@@ -4,15 +4,17 @@
 
 use eframe::egui;
 use std::env;
-use std::process::Command;
 use winreg::RegKey;
 use winreg::enums::*;
 use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 use directories::UserDirs;
 use std::path::{PathBuf};
 use ini::Ini;
-use windows::core::HSTRING;
-use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONERROR};
+use windows::core::{HSTRING, PCWSTR};
+use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONERROR, SW_HIDE};
+use windows::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW, SEE_MASK_NOCLOSEPROCESS};
+use windows::Win32::System::Threading::{WaitForSingleObject, GetExitCodeProcess, INFINITE};
+use windows::Win32::Foundation::CloseHandle;
 
 // The name of the Condor executable.
 const TARGET_EXE: &str = "Condor.exe";
@@ -191,46 +193,45 @@ impl ReviveHelperApp {
             };
             log_path.push("CondorVR");
             log_path.push("setup.log");
-            let log_path_str = log_path.to_string_lossy();
 
-            // Use PowerShell to trigger UAC elevation via Start-Process -Verb RunAs
-            let mut command = Command::new("powershell");
+            // Use native Windows API ShellExecuteExW to trigger UAC elevation
+            let mut sei = SHELLEXECUTEINFOW::default();
+            sei.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+            sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+            sei.lpVerb = windows::core::w!("runas");
+            
+            let path_w = HSTRING::from(&setup_path);
+            sei.lpFile = PCWSTR(path_w.as_ptr());
+            
+            let action_w = HSTRING::from(action);
+            sei.lpParameters = PCWSTR(action_w.as_ptr());
+            
+            sei.nShow = SW_HIDE.0 as i32;
 
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-            }
+            let success = unsafe { ShellExecuteExW(&mut sei) }.is_ok();
 
-            let status = command
-                .args([
-                    "-NoProfile",
-                    "-WindowStyle",
-                    "Hidden",
-                    "-Command",
-                    &format!(
-                        "Start-Process -FilePath \"{}\" -ArgumentList \"{}\" -Verb RunAs -Wait",
-                        setup_path, action
-                    ),
-                ])
-                .status();
+            if success {
+                unsafe {
+                    let _ = WaitForSingleObject(sei.hProcess, INFINITE);
+                    let mut exit_code = 0u32;
+                    let _ = GetExitCodeProcess(sei.hProcess, &mut exit_code);
+                    let _ = CloseHandle(sei.hProcess);
 
-            match status {
-                Ok(s) if s.success() => {
-                    println!("Successfully executed setup with action: {}", action);
-                    self.logs.push_str(&format!("Successfully executed setup with action: {}\n", action));
-                    configurer_success = true;
+                    if exit_code == 0 {
+                        println!("Successfully executed setup with action: {}", action);
+                        self.logs.push_str(&format!("Successfully executed setup with action: {}\n", action));
+                        configurer_success = true;
+                    } else {
+                        println!("Setup exited with error status: {}", exit_code);
+                        self.logs.push_str(&format!("Setup exited with error status: {}\n", exit_code));
+                        self.show_logs = true;
+                    }
                 }
-                Ok(s) => {
-                    println!("Setup exited with error status: {}", s);
-                    self.logs.push_str(&format!("Setup exited with error status: {}\n", s));
-                    self.show_logs = true;
-                }
-                Err(e) => {
-                    println!("Failed to execute setup: {}", e);
-                    self.logs.push_str(&format!("Failed to execute setup: {}\n", e));
-                    self.show_logs = true;
-                }
+            } else {
+                let err = std::io::Error::last_os_error();
+                println!("Failed to execute setup: {}", err);
+                self.logs.push_str(&format!("Failed to execute setup: {}\n", err));
+                self.show_logs = true;
             }
 
             // Read log file back
