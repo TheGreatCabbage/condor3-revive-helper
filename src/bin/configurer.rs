@@ -1,5 +1,6 @@
 use std::env;
-use std::io;
+use std::io::{self, Write};
+use std::fs::File;
 use winreg::RegKey;
 use winreg::enums::*;
 
@@ -14,10 +15,35 @@ const IFEO_PATH: &str =
     r#"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"#;
 const SERVICE_NAME: &str = "CondorReviveHelperService";
 
+struct Logger {
+    file: Option<File>,
+}
+
+impl Logger {
+    fn new(path: Option<&str>) -> Self {
+        let file = path.and_then(|p| File::create(p).ok());
+        Self { file }
+    }
+
+    fn log(&mut self, msg: &str) {
+        println!("{}", msg);
+        if let Some(ref mut f) = self.file {
+            let _ = writeln!(f, "{}", msg);
+        }
+    }
+
+    fn error(&mut self, msg: &str) {
+        eprintln!("{}", msg);
+        if let Some(ref mut f) = self.file {
+            let _ = writeln!(f, "ERROR: {}", msg);
+        }
+    }
+}
+
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        println!("Usage: Condor-VR-Configurer.exe [activate|deactivate|--version]");
+        println!("Usage: Condor-VR-Configurer.exe [activate|deactivate|--version] [--log-file <path>]");
         return Ok(());
     }
 
@@ -26,11 +52,31 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
+    let mut log_path = None;
+    for i in 0..args.len() {
+        if args[i] == "--log-file" && i + 1 < args.len() {
+            log_path = Some(args[i+1].as_str());
+        }
+    }
+
+    let mut logger = Logger::new(log_path);
+
     let command = &args[1];
+    let res = run_command(command, &mut logger);
+
+    if let Err(e) = res {
+        logger.error(&format!("Fatal error: {}", e));
+        return Err(e);
+    }
+
+    Ok(())
+}
+
+fn run_command(command: &str, logger: &mut Logger) -> io::Result<()> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let target_key_path = format!(r#"{}\{}"#, IFEO_PATH, TARGET_EXE);
 
-    match command.as_str() {
+    match command {
         "activate" => {
             let mut launcher_path = env::current_exe()?;
             launcher_path.pop();
@@ -46,51 +92,51 @@ fn main() -> io::Result<()> {
             let mut service_ok = false;
             match install_service(service_path_str) {
                 Ok(_) => {
-                    println!("Service installed.");
+                    logger.log("Service installed.");
                     service_ok = true;
                 }
                 Err(e) if e.code() == ERROR_SERVICE_EXISTS.to_hresult() => {
-                    println!("Service already exists, updating configuration...");
+                    logger.log("Service already exists, updating configuration...");
                     if let Err(e) = update_service_config(service_path_str) {
-                        eprintln!("Failed to update service config: {}", e);
+                        logger.error(&format!("Failed to update service config: {}", e));
                     } else {
                         service_ok = true;
                     }
                 }
-                Err(e) => eprintln!("Failed to install service: {}", e),
+                Err(e) => logger.error(&format!("Failed to install service: {}", e)),
             }
 
             if service_ok {
                 if let Err(e) = allow_everyone_to_start_service() {
-                    eprintln!("Failed to set service permissions: {}", e);
+                    logger.error(&format!("Failed to set service permissions: {}", e));
                 } else {
-                    println!("Service permissions set.");
+                    logger.log("Service permissions set.");
                 }
 
                 let (target_key, _) =
                     hklm.create_subkey_with_flags(&target_key_path, KEY_ALL_ACCESS)?;
                 let launcher_command = format!("\"{}\"", launcher_path_str);
                 target_key.set_value("Debugger", &launcher_command)?;
-                println!("Hook activated with: {}", launcher_command);
+                logger.log(&format!("Hook activated with: {}", launcher_command));
             } else {
-                eprintln!("Error: VR support could not be activated because the helper service could not be installed.");
-                eprintln!("This often happens if you recently uninstalled and haven't restarted yet.");
-                eprintln!("Please restart your computer and try again.");
+                logger.error("Error: VR support could not be activated because the helper service could not be installed.");
+                logger.error("This often happens if you recently uninstalled and haven't restarted yet.");
+                logger.error("Please restart your computer and try again.");
             }
         }
         "deactivate" => {
             if let Ok(key) = hklm.open_subkey_with_flags(&target_key_path, KEY_ALL_ACCESS) {
                 let _ = key.delete_value("Debugger");
-                println!("Hook deactivated.");
+                logger.log("Hook deactivated.");
             }
 
             if let Err(e) = uninstall_service(SERVICE_NAME) {
-                eprintln!("Failed to uninstall {}: {}", SERVICE_NAME, e);
+                logger.error(&format!("Failed to uninstall {}: {}", SERVICE_NAME, e));
             } else {
-                println!("Service {} uninstalled.", SERVICE_NAME);
+                logger.log(&format!("Service {} uninstalled.", SERVICE_NAME));
             }
         }
-        _ => println!("Unknown command: {}", command),
+        _ => logger.log(&format!("Unknown command: {}", command)),
     }
 
     Ok(())

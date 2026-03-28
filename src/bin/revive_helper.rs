@@ -63,6 +63,8 @@ struct ReviveHelperApp {
     is_active: bool,
     pilots: Vec<PilotStatus>,
     status_msg: String,
+    logs: String,
+    show_logs: bool,
 }
 
 impl Default for ReviveHelperApp {
@@ -71,6 +73,8 @@ impl Default for ReviveHelperApp {
             is_active: false,
             pilots: Vec::new(),
             status_msg: "Initializing...".to_string(),
+            logs: String::new(),
+            show_logs: false,
         };
         slf.refresh_status();
         slf
@@ -165,33 +169,24 @@ impl ReviveHelperApp {
         // Refresh status first to ensure we have the latest pilot list and hook state
         self.refresh_status();
 
+        self.logs.clear();
+        self.show_logs = false;
+
         // Determine new VR value for Setup.ini files
         let new_vr_val = if self.is_active { "0" } else { "1" };
+        let mut configurer_success = false;
         
-        // First, toggle INI files for all pilots and global settings
-        for pilot in &self.pilots {
-            let mut conf = match Ini::load_from_file(&pilot.path) {
-                Ok(c) => c,
-                Err(_) => {
-                    continue;
-                }
-            };
-            
-            // Set VROculusRift to the target value in the Graphics section
-            conf.with_section(Some("Graphics"))
-                .set("VROculusRift", new_vr_val);
-
-            if let Err(e) = conf.write_to_file(&pilot.path) {
-                show_error(&format!("Failed to write to {}: {}", pilot.path.display(), e));
-            }
-        }
-
         if let Some(setup_path) = self.get_setup_path() {
             let action = if self.is_active {
                 "deactivate"
             } else {
                 "activate"
             };
+
+            // Use temporary log file
+            let mut log_path = env::temp_dir();
+            log_path.push("condor_vr_setup.log");
+            let log_path_str = log_path.to_string_lossy();
 
             // Use PowerShell to trigger UAC elevation via Start-Process -Verb RunAs
             let mut command = Command::new("powershell");
@@ -209,8 +204,8 @@ impl ReviveHelperApp {
                     "Hidden",
                     "-Command",
                     &format!(
-                        "Start-Process -FilePath \"{}\" -ArgumentList \"{}\" -Verb RunAs -Wait",
-                        setup_path, action
+                        "Start-Process -FilePath \"{}\" -ArgumentList \"{}\", \"--log-file\", \"{}\" -Verb RunAs -Wait",
+                        setup_path, action, log_path_str
                     ),
                 ])
                 .status();
@@ -218,11 +213,61 @@ impl ReviveHelperApp {
             match status {
                 Ok(s) if s.success() => {
                     println!("Successfully executed setup with action: {}", action);
+                    self.logs.push_str(&format!("Successfully executed setup with action: {}\n", action));
+                    configurer_success = true;
                 }
-                Ok(s) => println!("Setup exited with error status: {}", s),
-                Err(e) => println!("Failed to execute setup: {}", e),
+                Ok(s) => {
+                    println!("Setup exited with error status: {}", s);
+                    self.logs.push_str(&format!("Setup exited with error status: {}\n", s));
+                    self.show_logs = true;
+                }
+                Err(e) => {
+                    println!("Failed to execute setup: {}", e);
+                    self.logs.push_str(&format!("Failed to execute setup: {}\n", e));
+                    self.show_logs = true;
+                }
             }
+
+            // Read log file back
+            if let Ok(l) = std::fs::read_to_string(&log_path) {
+                if !l.is_empty() {
+                    self.logs.push_str("\n--- Setup Logs ---\n");
+                    self.logs.push_str(&l);
+                    if l.contains("ERROR:") {
+                        self.show_logs = true;
+                        configurer_success = false; // Override success if the log contains errors
+                    }
+                }
+            }
+            let _ = std::fs::remove_file(log_path);
         }
+
+        if configurer_success {
+            // Now toggle INI files for all pilots and global settings
+            for pilot in &self.pilots {
+                let mut conf = match Ini::load_from_file(&pilot.path) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        continue;
+                    }
+                };
+                
+                // Set VROculusRift to the target value in the Graphics section
+                conf.with_section(Some("Graphics"))
+                    .set("VROculusRift", new_vr_val);
+
+                if let Err(e) = conf.write_to_file(&pilot.path) {
+                    show_error(&format!("Failed to write to {}: {}", pilot.path.display(), e));
+                    self.logs.push_str(&format!("Failed to write to {}: {}\n", pilot.path.display(), e));
+                    self.show_logs = true;
+                } else {
+                    self.logs.push_str(&format!("Updated {}.\n", pilot.path.display()));
+                }
+            }
+        } else {
+            self.logs.push_str("\nSkipping Setup.ini updates because the service configuration failed.\n");
+        }
+
         self.refresh_status();
     }
 }
@@ -281,6 +326,44 @@ impl eframe::App for ReviveHelperApp {
             }
             ui.add_space(10.0);
             ui.label(egui::RichText::new("Tip: Toggling the VR setting will open a permission dialog and update all pilots' Setup.ini.").weak());
+
+            if !self.logs.is_empty() {
+                ui.add_space(10.0);
+                if ui.button("View Execution Logs").clicked() {
+                    self.show_logs = true;
+                }
+            }
+
+            if self.show_logs {
+                let mut is_open = self.show_logs;
+                let mut clear_clicked = false;
+                egui::Window::new("Execution Logs")
+                    .open(&mut is_open)
+                    .default_size([600.0, 400.0])
+                    .resizable(true)
+                    .show(ctx, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("log_scroll")
+                            .stick_to_bottom(true)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::Label::new(egui::RichText::new(&self.logs).monospace())
+                                        .wrap()
+                                );
+                            });
+                        ui.add_space(10.0);
+                        if ui.button("Clear & Close").clicked() {
+                            clear_clicked = true;
+                        }
+                    });
+                
+                if clear_clicked {
+                    self.logs.clear();
+                    self.show_logs = false;
+                } else {
+                    self.show_logs = is_open;
+                }
+            }
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::RIGHT), |ui| {
                 ui.add_space(10.0);
