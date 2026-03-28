@@ -1,5 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
+use directories::UserDirs;
+use ini::Ini;
 
 pub const TARGET_EXE: &str = "Condor.exe";
 pub const IFEO_PATH: &str = r#"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"#;
@@ -7,6 +9,70 @@ pub const SETTINGS_PATH: &str = r#"Software\CondorVR"#;
 pub const SERVICE_NAME: &str = "CondorReviveHelperService";
 pub const LAUNCHER_EXE_NAME: &str = "CondorVR.exe";
 pub const CONFIGURER_EXE_NAME: &str = "Condor-VR-Configurer.exe";
+
+/// Updates VROculusRift in Setup.ini files across all Condor directories in Documents.
+pub fn update_condor_setup_ini(vr_enabled: bool) -> Vec<(String, bool)> {
+    let mut results = Vec::new();
+    let val = if vr_enabled { "1" } else { "0" };
+
+    if let Some(user_dirs) = UserDirs::new() {
+        if let Some(docs) = user_dirs.document_dir() {
+            if let Ok(entries) = std::fs::read_dir(docs) {
+                for entry in entries.flatten() {
+                    if !entry.path().is_dir() {
+                        continue;
+                    }
+
+                    let cond_dir_name = entry.file_name().to_string_lossy().into_owned();
+                    if !cond_dir_name.contains("Condor") {
+                        continue;
+                    }
+
+                    let base_dir = entry.path();
+                    
+                    // 1. Update global Setup.ini
+                    let global_setup = base_dir.join("Setup.ini");
+                    if global_setup.exists() {
+                        if update_ini_file(&global_setup, val) {
+                            results.push((format!("Global Settings ({})", cond_dir_name), true));
+                        } else {
+                            results.push((format!("Global Settings ({})", cond_dir_name), false));
+                        }
+                    }
+
+                    // 2. Update all pilot Setup.ini files
+                    let pilots_dir = base_dir.join("Pilots");
+                    if let Ok(p_entries) = std::fs::read_dir(pilots_dir) {
+                        for p_entry in p_entries.flatten() {
+                            if p_entry.path().is_dir() {
+                                let p_name = p_entry.file_name().to_string_lossy().into_owned();
+                                let p_setup = p_entry.path().join("Setup.ini");
+                                if p_setup.exists() {
+                                    if update_ini_file(&p_setup, val) {
+                                        results.push((format!("Pilot: {} ({})", p_name, cond_dir_name), true));
+                                    } else {
+                                        results.push((format!("Pilot: {} ({})", p_name, cond_dir_name), false));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    results
+}
+
+fn update_ini_file(path: &Path, val: &str) -> bool {
+    if let Ok(mut conf) = Ini::load_from_file(path) {
+        conf.with_section(Some("Graphics"))
+            .set("VROculusRift", val);
+        conf.write_to_file(path).is_ok()
+    } else {
+        false
+    }
+}
 
 /// Validates that a path is not a symbolic link or junction (reparse point).
 pub fn is_safe_path(path: &Path) -> bool {

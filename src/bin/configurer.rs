@@ -13,7 +13,7 @@ use windows::Win32::System::Services::*;
 
 use condor3_revive_helper::{
     find_revive_injector, get_companion_exe_path, get_secure_log_path, handle_version_args,
-    IFEO_PATH, LAUNCHER_EXE_NAME, SERVICE_NAME, SETTINGS_PATH, TARGET_EXE,
+    IFEO_PATH, LAUNCHER_EXE_NAME, SERVICE_NAME, SETTINGS_PATH, TARGET_EXE, update_condor_setup_ini,
 };
 
 fn get_local_secure_log_path() -> PathBuf {
@@ -124,6 +124,16 @@ fn run_command(command: &str, logger: &mut Logger) -> io::Result<()> {
                 } else {
                     logger.error("Warning: ReviveInjector.exe not found. You may need to install Revive.");
                 }
+
+                // Update Condor Setup.ini files to enable VR
+                let results = update_condor_setup_ini(true);
+                for (name, success) in results {
+                    if success {
+                        logger.log(&format!("Updated Setup.ini for: {}", name));
+                    } else {
+                        logger.error(&format!("Failed to update Setup.ini for: {}", name));
+                    }
+                }
             } else {
                 logger.error("Error: VR support could not be activated because the helper service could not be installed.");
                 logger.error("This often happens if you recently uninstalled and haven't restarted yet.");
@@ -140,6 +150,16 @@ fn run_command(command: &str, logger: &mut Logger) -> io::Result<()> {
                 logger.error(&format!("Failed to uninstall {}: {}", SERVICE_NAME, e));
             } else {
                 logger.log(&format!("Service {} uninstalled.", SERVICE_NAME));
+            }
+
+            // Update Condor Setup.ini files to disable VR
+            let results = update_condor_setup_ini(false);
+            for (name, success) in results {
+                if success {
+                    logger.log(&format!("Updated Setup.ini for: {}", name));
+                } else {
+                    logger.error(&format!("Failed to update Setup.ini for: {}", name));
+                }
             }
         }
         _ => logger.log(&format!("Unknown command: {}", command)),

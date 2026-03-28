@@ -17,7 +17,7 @@ use windows::Win32::Foundation::CloseHandle;
 
 use condor3_revive_helper::{
     get_companion_exe_path, get_secure_log_path, handle_version_args, CONFIGURER_EXE_NAME,
-    IFEO_PATH, TARGET_EXE,
+    IFEO_PATH, TARGET_EXE, update_condor_setup_ini,
 };
 
 fn show_error(msg: &str) {
@@ -144,11 +144,11 @@ impl ReviveHelperApp {
 
                         // Check pilots
                         let pilots_dir = base_dir.join("Pilots");
-                        if let Ok(entries) = std::fs::read_dir(pilots_dir) {
-                            for entry in entries.flatten() {
-                                if entry.path().is_dir() {
-                                    let pilot_name = entry.file_name().to_string_lossy().into_owned();
-                                    let setup_ini = entry.path().join("Setup.ini");
+                        if let Ok(p_entries) = std::fs::read_dir(pilots_dir) {
+                            for p_entry in p_entries.flatten() {
+                                if p_entry.path().is_dir() {
+                                    let pilot_name = p_entry.file_name().to_string_lossy().into_owned();
+                                    let setup_ini = p_entry.path().join("Setup.ini");
                                     if setup_ini.exists() {
                                         let mut vr_enabled = false;
                                         if let Ok(conf) = Ini::load_from_file(&setup_ini) {
@@ -181,7 +181,6 @@ impl ReviveHelperApp {
         self.show_logs = false;
 
         // Determine new VR value for Setup.ini files
-        let new_vr_val = if self.is_active { "0" } else { "1" };
         let mut configurer_success = false;
         
         if let Some(setup_path) = self.get_setup_path() {
@@ -250,24 +249,17 @@ impl ReviveHelperApp {
 
         if configurer_success {
             // Now toggle INI files for all pilots and global settings
-            for pilot in &self.pilots {
-                let mut conf = match Ini::load_from_file(&pilot.path) {
-                    Ok(c) => c,
-                    Err(_) => {
-                        continue;
-                    }
-                };
-                
-                // Set VROculusRift to the target value in the Graphics section
-                conf.with_section(Some("Graphics"))
-                    .set("VROculusRift", new_vr_val);
-
-                if let Err(e) = conf.write_to_file(&pilot.path) {
-                    show_error(&format!("Failed to write to {}: {}", pilot.path.display(), e));
-                    self.logs.push_str(&format!("Failed to write to {}: {}\n", pilot.path.display(), e));
-                    self.show_logs = true;
+            let target_vr_bool = !self.is_active; // If it was active, we are deactivating, so target is false
+            let results = update_condor_setup_ini(target_vr_bool);
+            
+            for (name, success) in results {
+                if success {
+                    self.logs.push_str(&format!("Updated {}.\n", name));
                 } else {
-                    self.logs.push_str(&format!("Updated {}.\n", pilot.path.display()));
+                    let err_msg = format!("Failed to update {}.", name);
+                    show_error(&err_msg);
+                    self.logs.push_str(&format!("{}\n", err_msg));
+                    self.show_logs = true;
                 }
             }
         } else {
