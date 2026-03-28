@@ -16,7 +16,6 @@ use std::{thread, time::Duration, time::Instant};
 
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Services::*;
-use windows::Win32::System::Registry::*;
 use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 use windows::core::PCWSTR;
 
@@ -25,6 +24,11 @@ use eframe::egui;
 use windows::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT, ConvertSidToStringSidW};
 use windows::Win32::Security::{DACL_SECURITY_INFORMATION, ACCESS_ALLOWED_ACE, ACE_HEADER};
 use windows::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
+
+use condor3_revive_helper::{
+    find_revive_injector, get_companion_exe_path, get_secure_log_path, handle_version_args,
+    is_ifeo_hook_present, is_safe_path, SERVICE_NAME,
+};
 
 fn read_env_var_from_file(var_name: &str) -> Option<String> {
     if let Ok(mut exe_path) = env::current_exe() {
@@ -134,9 +138,6 @@ fn has_strict_permissions(path: &Path) -> bool {
     true
 }
 
-const BYPASS_SERVICE_NAME: &str = "CondorReviveHelperService";
-const SETTINGS_PATH: &str = r#"Software\CondorVR"#;
-
 fn trigger_bypass_service() -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         let scm = match OpenSCManagerW(None, None, SC_MANAGER_CONNECT) {
@@ -147,7 +148,7 @@ fn trigger_bypass_service() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
         
-        let service_name_w: Vec<u16> = BYPASS_SERVICE_NAME.encode_utf16().chain(Some(0)).collect();
+        let service_name_w: Vec<u16> = SERVICE_NAME.encode_utf16().chain(Some(0)).collect();
         let service = match OpenServiceW(
             scm,
             PCWSTR(service_name_w.as_ptr()),
@@ -155,7 +156,7 @@ fn trigger_bypass_service() -> Result<(), Box<dyn std::error::Error>> {
         ) {
             Ok(h) => h,
             Err(e) => {
-                log(&format!("Error: OpenServiceW failed for {}: {}", BYPASS_SERVICE_NAME, e));
+                log(&format!("Error: OpenServiceW failed for {}: {}", SERVICE_NAME, e));
                 let _ = CloseServiceHandle(scm);
                 return Err(e.into());
             }
@@ -216,59 +217,13 @@ fn trigger_bypass_service() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-fn is_ifeo_hook_present() -> bool {
-    unsafe {
-        let hklm = HKEY_LOCAL_MACHINE;
-        let subkey_path = r"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\Condor.exe";
-        let subkey_wide: Vec<u16> = subkey_path.encode_utf16().chain(Some(0)).collect();
-
-        let mut hkey = HKEY::default();
-        if RegOpenKeyExW(
-            hklm,
-            PCWSTR(subkey_wide.as_ptr()),
-            None,
-            KEY_READ,
-            &mut hkey,
-        ) != ERROR_SUCCESS {
-            return false;
-        }
-
-        let value_name: Vec<u16> = "Debugger".encode_utf16().chain(Some(0)).collect();
-        let res = RegQueryValueExW(
-            hkey,
-            PCWSTR(value_name.as_ptr()),
-            None,
-            None,
-            None,
-            None,
-        );
-
-        let _ = RegCloseKey(hkey);
-        res == ERROR_SUCCESS
-    }
-}
-
 fn log(msg: &str) {
     println!("{}", msg);
 
     #[cfg(feature = "logging")]
     {
-        let log_dir = if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-            std::path::PathBuf::from(local_app_data).join("CondorVR")
-        } else {
-            return;
-        };
-
-        if log_dir.exists() {
-            if !condor3_revive_helper::is_safe_path(&log_dir) {
-                return; // Don't log to unsafe directory
-            }
-        } else {
-            let _ = std::fs::create_dir_all(&log_dir);
-        }
-
-        let log_path = log_dir.join("CondorVR_log.txt");
-        if log_path.exists() && !condor3_revive_helper::is_safe_path(&log_path) {
+        let log_path = get_secure_log_path("CondorVR", "CondorVR_log.txt");
+        if log_path.exists() && !is_safe_path(&log_path) {
             return;
         }
 
@@ -302,10 +257,7 @@ impl LauncherApp {
     }
 
     fn open_settings(&self) {
-        if let Ok(mut p) = env::current_exe() {
-            p.pop();
-            p.push("gui.exe");
-
+        if let Some(p) = get_companion_exe_path("gui.exe") {
             if p.exists() {
                 let mut cmd = std::process::Command::new(p);
                 #[cfg(windows)]
@@ -392,42 +344,33 @@ impl eframe::App for LauncherApp {
 }
 
 fn main() -> eframe::Result {
-    let args: Vec<String> = env::args().collect();
-    if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
+    if handle_version_args("CondorVR") {
         unsafe {
             let _ = AttachConsole(ATTACH_PARENT_PROCESS);
         }
-        println!("CondorVR version {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
 
+    let args: Vec<String> = env::args().collect();
     log(&format!("Launcher started with args: {:?}", args));
 
     let is_manual = args.len() < 2;
 
     // Parse target path and game args
-    let mut target_parts = Vec::new();
+    let mut target_path = String::new();
     let mut game_args = Vec::new();
-    let mut found_args = false;
 
     if !is_manual {
-        for arg in args.iter().skip(1) {
-            if found_args {
-                game_args.push(arg.clone());
-            } else {
-                target_parts.push(arg.clone());
-                if arg.starts_with('-') || arg.starts_with('/') {
-                    let switch = target_parts.pop().unwrap();
-                    game_args.push(switch);
-                    found_args = true;
-                } else if arg.to_lowercase().ends_with(".exe") {
-                    found_args = true;
-                }
-            }
+        let mut arg_iter = args.iter().skip(1);
+        let first_arg = arg_iter.next().unwrap();
+        
+        // IFEO passes the full path of the executable as the first argument to the debugger.
+        // It might be followed by other arguments meant for the executable.
+        target_path = first_arg.clone();
+        for arg in arg_iter {
+            game_args.push(arg.clone());
         }
     }
-
-    let target_path = target_parts.join(" ");
 
     let state = Arc::new(LauncherState {
         progress: AtomicU32::new(0.0f32.to_bits()),
@@ -438,36 +381,8 @@ fn main() -> eframe::Result {
     let state_clone = Arc::clone(&state);
     let handle = if !is_manual {
         Some(thread::spawn(move || {
-            // Priority 1: Check HKLM Registry (Secure)
-            let mut revive_path = None;
-            unsafe {
-                let mut hkey = HKEY::default();
-                let subkey_wide: Vec<u16> = SETTINGS_PATH.encode_utf16().chain(Some(0)).collect();
-                if RegOpenKeyExW(HKEY_LOCAL_MACHINE, PCWSTR(subkey_wide.as_ptr()), None, KEY_READ, &mut hkey) == ERROR_SUCCESS {
-                    let value_name: Vec<u16> = "ReviveInjectorPath".encode_utf16().chain(Some(0)).collect();
-                    let mut buffer = [0u16; 512];
-                    let mut size = (buffer.len() * 2) as u32;
-                    if RegQueryValueExW(hkey, PCWSTR(value_name.as_ptr()), None, None, Some(buffer.as_mut_ptr() as *mut u8), Some(&mut size)) == ERROR_SUCCESS {
-                        revive_path = Some(String::from_utf16_lossy(&buffer[..((size / 2) as usize - 1)]));
-                    }
-                    let _ = RegCloseKey(hkey);
-                }
-            }
-
-            // Priority 2: Fallbacks (Hardcoded trusted paths)
-            if revive_path.is_none() {
-                let fallbacks = [
-                    r#"C:\Program Files\Revive\Revive\ReviveInjector.exe"#,
-                    r#"C:\Program Files\Revive\Revive\x64\ReviveInjector.exe"#,
-                    r#"C:\Program Files\Revive\ReviveInjector.exe"#,
-                ];
-                for fallback in fallbacks {
-                    if Path::new(fallback).exists() {
-                        revive_path = Some(fallback.to_string());
-                        break;
-                    }
-                }
-            }
+            // Priority 1 & 2: Check HKLM Registry and Fallbacks (Hardcoded trusted paths)
+            let mut revive_path = find_revive_injector();
 
             // Priority 3: .env file (Least Secure, needs strict validation)
             if revive_path.is_none() {

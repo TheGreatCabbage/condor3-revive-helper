@@ -11,29 +11,13 @@ use windows::Win32::Security::*;
 use windows::Win32::Security::Authorization::*;
 use windows::Win32::System::Services::*;
 
-const TARGET_EXE: &str = "Condor.exe";
-const IFEO_PATH: &str =
-    r#"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"#;
-const SETTINGS_PATH: &str = r#"Software\CondorVR"#;
-const SERVICE_NAME: &str = "CondorReviveHelperService";
+use condor3_revive_helper::{
+    find_revive_injector, get_companion_exe_path, get_secure_log_path, handle_version_args,
+    IFEO_PATH, LAUNCHER_EXE_NAME, SERVICE_NAME, SETTINGS_PATH, TARGET_EXE,
+};
 
-fn find_revive_injector() -> Option<String> {
-    let fallbacks = [
-        r#"C:\Program Files\Revive\Revive\ReviveInjector.exe"#,
-        r#"C:\Program Files\Revive\Revive\x64\ReviveInjector.exe"#,
-        r#"C:\Program Files\Revive\ReviveInjector.exe"#,
-    ];
-
-    for fallback in fallbacks {
-        if std::path::Path::new(fallback).exists() {
-            return Some(fallback.to_string());
-        }
-    }
-    None
-}
-
-fn get_secure_log_path() -> PathBuf {
-    condor3_revive_helper::get_secure_log_path("CondorVR", "setup.log")
+fn get_local_secure_log_path() -> PathBuf {
+    get_secure_log_path("CondorVR", "setup.log")
 }
 
 struct Logger {
@@ -62,18 +46,17 @@ impl Logger {
 }
 
 fn main() -> io::Result<()> {
+    if handle_version_args("Condor-VR-Configurer") {
+        return Ok(());
+    }
+
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        println!("Usage: Condor-VR-Configurer.exe [activate|deactivate|--version]");
+        println!("Usage: Condor-VR-Configurer.exe [activate|deactivate]");
         return Ok(());
     }
 
-    if args.contains(&"--version".to_string()) || args.contains(&"--version".to_string()) {
-        println!("Condor-VR-Configurer version {}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
-    }
-
-    let log_path = get_secure_log_path();
+    let log_path = get_local_secure_log_path();
     let mut logger = Logger::new(&log_path);
 
     let command = &args[1];
@@ -93,15 +76,13 @@ fn run_command(command: &str, logger: &mut Logger) -> io::Result<()> {
 
     match command {
         "activate" => {
-            let mut launcher_path = env::current_exe()?;
-            launcher_path.pop();
-            launcher_path.push("CondorVR.exe");
+            let launcher_path = get_companion_exe_path(LAUNCHER_EXE_NAME)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Launcher not found"))?;
             let launcher_path_str = launcher_path.to_str().expect("Invalid path");
 
             // Install or update Service
-            let mut service_path = env::current_exe()?;
-            service_path.pop();
-            service_path.push(format!("{SERVICE_NAME}.exe"));
+            let service_path = get_companion_exe_path(&format!("{SERVICE_NAME}.exe"))
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Service not found"))?;
             let service_path_str = service_path.to_str().expect("Invalid path");
 
             let mut service_ok = false;

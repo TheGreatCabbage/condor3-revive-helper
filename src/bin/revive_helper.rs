@@ -3,7 +3,6 @@
 #![windows_subsystem = "windows"]
 
 use eframe::egui;
-use std::env;
 use winreg::RegKey;
 use winreg::enums::*;
 use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
@@ -16,8 +15,10 @@ use windows::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW, SEE_MASK_NOC
 use windows::Win32::System::Threading::{WaitForSingleObject, GetExitCodeProcess, INFINITE};
 use windows::Win32::Foundation::CloseHandle;
 
-// The name of the Condor executable.
-const TARGET_EXE: &str = "Condor.exe";
+use condor3_revive_helper::{
+    get_companion_exe_path, get_secure_log_path, handle_version_args, CONFIGURER_EXE_NAME,
+    IFEO_PATH, TARGET_EXE,
+};
 
 fn show_error(msg: &str) {
     unsafe {
@@ -30,17 +31,11 @@ fn show_error(msg: &str) {
     }
 }
 
-// The registry path at which we can create a hook which will cause Conder.exe to open our launcher instead.
-const IFEO_PATH: &str =
-    r#"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"#;
-
 fn main() -> eframe::Result {
-    let args: Vec<String> = env::args().collect();
-    if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
+    if handle_version_args("Condor3 Revive Helper") {
         unsafe {
             let _ = AttachConsole(ATTACH_PARENT_PROCESS);
         }
-        println!("Condor3 Revive Helper version {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
 
@@ -85,10 +80,10 @@ impl Default for ReviveHelperApp {
 
 impl ReviveHelperApp {
     fn get_setup_path(&self) -> Option<String> {
-        let mut p = env::current_exe().ok()?;
-        p.pop();
-        p.push("Condor-VR-Configurer.exe");
-        Some(p.to_str()?.to_string())
+        get_companion_exe_path(CONFIGURER_EXE_NAME)?
+            .to_str()?
+            .to_string()
+            .into()
     }
 
     fn refresh_status(&mut self) {
@@ -186,7 +181,7 @@ impl ReviveHelperApp {
             };
 
             // Use secure log path in ProgramData
-            let log_path = condor3_revive_helper::get_secure_log_path("CondorVR", "setup.log");
+            let log_path = get_secure_log_path("CondorVR", "setup.log");
 
             // Use native Windows API ShellExecuteExW to trigger UAC elevation
             let mut sei = SHELLEXECUTEINFOW::default();

@@ -2,7 +2,6 @@
 //! deleted while the launcher runs and then re-enabled after Condor is launched via ReviveInjector. 
 //! This prevents an infinite loop of the launcher being executed. 
 
-use std::env;
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -25,17 +24,15 @@ use windows_service::{
     service_dispatcher,
 };
 
-pub const SERVICE_NAME: &str = "CondorReviveHelperService";
-const TARGET_EXE: &str = "Condor.exe";
-const IFEO_PATH: &str =
-    r#"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"#;
+use condor3_revive_helper::{
+    get_companion_exe_path, handle_version_args, IFEO_PATH, LAUNCHER_EXE_NAME, SERVICE_NAME,
+    TARGET_EXE,
+};
 
 define_windows_service!(ffi_service_main, service_main);
 
 fn main() -> Result<(), windows_service::Error> {
-    let args: Vec<String> = env::args().collect();
-    if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
-        println!("CondorReviveHelperService version {}", env!("CARGO_PKG_VERSION"));
+    if handle_version_args("CondorReviveHelperService") {
         return Ok(());
     }
 
@@ -105,10 +102,10 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
         thread::sleep(Duration::from_millis(500));
     }
 
-    // 3. Restore IFEO hook (only if we didn't stop early)
-    if running.load(Ordering::SeqCst) {
-        let _ = restore_ifeo_hook();
-    }
+    // 3. Restore IFEO hook (always restore if we are exiting normally or by Condor.exe detection)
+    // We only skip if we were stopped and didn't even get to the running state, 
+    // but actually it's safer to always try to restore it if we successfully deleted it.
+    let _ = restore_ifeo_hook();
 
     status_handle.set_service_status(ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
@@ -160,9 +157,7 @@ fn delete_ifeo_hook() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn restore_ifeo_hook() -> Result<(), Box<dyn std::error::Error>> {
-    let mut launcher_path = env::current_exe()?;
-    launcher_path.pop();
-    launcher_path.push("CondorVR.exe");
+    let launcher_path = get_companion_exe_path(LAUNCHER_EXE_NAME).ok_or("Launcher not found")?;
     let launcher_path_str = launcher_path.to_str().ok_or("Invalid path")?;
     let launcher_command = format!("\"{}\"", launcher_path_str);
 
@@ -172,7 +167,7 @@ fn restore_ifeo_hook() -> Result<(), Box<dyn std::error::Error>> {
         let subkey_wide: Vec<u16> = subkey_path.encode_utf16().chain(Some(0)).collect();
 
         let mut hkey = Default::default();
-        let _ = RegCreateKeyExW(
+        let res = RegCreateKeyExW(
             hklm,
             windows::core::PCWSTR(subkey_wide.as_ptr()),
             None,
@@ -184,7 +179,7 @@ fn restore_ifeo_hook() -> Result<(), Box<dyn std::error::Error>> {
             None,
         );
 
-        if !hkey.is_invalid() {
+        if res == windows::Win32::Foundation::ERROR_SUCCESS && !hkey.is_invalid() {
             let value_name: Vec<u16> = "Debugger".encode_utf16().chain(Some(0)).collect();
             let value_data: Vec<u16> = launcher_command.encode_utf16().chain(Some(0)).collect();
 
@@ -216,9 +211,9 @@ fn is_process_running(process_name: &str) -> bool {
 
         if Process32FirstW(snapshot, &mut entry).is_ok() {
             loop {
-                let current_name = String::from_utf16_lossy(&entry.szExeFile)
-                    .trim_matches('\0')
-                    .to_string();
+                let end = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+                let current_name = String::from_utf16_lossy(&entry.szExeFile[..end]);
+                
                 if current_name.eq_ignore_ascii_case(process_name) {
                     let _ = CloseHandle(snapshot);
                     return true;
