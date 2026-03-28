@@ -1,6 +1,7 @@
 use std::env;
 use std::io::{self, Write};
 use std::fs::File;
+use std::path::PathBuf;
 use winreg::RegKey;
 use winreg::enums::*;
 
@@ -15,13 +16,25 @@ const IFEO_PATH: &str =
     r#"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"#;
 const SERVICE_NAME: &str = "CondorReviveHelperService";
 
+fn get_secure_log_path() -> PathBuf {
+    let mut path = if let Some(pd) = env::var_os("ProgramData") {
+        PathBuf::from(pd)
+    } else {
+        PathBuf::from("C:\\ProgramData")
+    };
+    path.push("CondorVR");
+    let _ = std::fs::create_dir_all(&path);
+    path.push("setup.log");
+    path
+}
+
 struct Logger {
     file: Option<File>,
 }
 
 impl Logger {
-    fn new(path: Option<&str>) -> Self {
-        let file = path.and_then(|p| File::create(p).ok());
+    fn new(path: &std::path::Path) -> Self {
+        let file = File::create(path).ok();
         Self { file }
     }
 
@@ -43,23 +56,17 @@ impl Logger {
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        println!("Usage: Condor-VR-Configurer.exe [activate|deactivate|--version] [--log-file <path>]");
+        println!("Usage: Condor-VR-Configurer.exe [activate|deactivate|--version]");
         return Ok(());
     }
 
-    if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
+    if args.contains(&"--version".to_string()) || args.contains(&"--version".to_string()) {
         println!("Condor-VR-Configurer version {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
 
-    let mut log_path = None;
-    for i in 0..args.len() {
-        if args[i] == "--log-file" && i + 1 < args.len() {
-            log_path = Some(args[i+1].as_str());
-        }
-    }
-
-    let mut logger = Logger::new(log_path);
+    let log_path = get_secure_log_path();
+    let mut logger = Logger::new(&log_path);
 
     let command = &args[1];
     let res = run_command(command, &mut logger);
@@ -281,8 +288,8 @@ fn allow_everyone_to_start_service() -> Result<(), windows::core::Error> {
         // SDDL for:
         // - Local System (SY): Generic All (GA)
         // - Built-in Administrators (BA): Generic All (GA)
-        // - Everyone (WD): Start (RP) and Query Status (LC)
-        let sddl = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;RPLC;;;WD)";
+        // - Authenticated Users (AU): Start (RP) and Query Status (LC)
+        let sddl = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;RPLC;;;AU)";
         let sddl_w: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();
 
         let mut p_sd: PSECURITY_DESCRIPTOR = PSECURITY_DESCRIPTOR::default();

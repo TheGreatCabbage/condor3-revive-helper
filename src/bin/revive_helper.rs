@@ -183,9 +183,14 @@ impl ReviveHelperApp {
                 "activate"
             };
 
-            // Use temporary log file
-            let mut log_path = env::temp_dir();
-            log_path.push("condor_vr_setup.log");
+            // Use secure log path in ProgramData
+            let mut log_path = if let Some(pd) = env::var_os("ProgramData") {
+                PathBuf::from(pd)
+            } else {
+                PathBuf::from("C:\\ProgramData")
+            };
+            log_path.push("CondorVR");
+            log_path.push("setup.log");
             let log_path_str = log_path.to_string_lossy();
 
             // Use PowerShell to trigger UAC elevation via Start-Process -Verb RunAs
@@ -204,8 +209,8 @@ impl ReviveHelperApp {
                     "Hidden",
                     "-Command",
                     &format!(
-                        "Start-Process -FilePath \"{}\" -ArgumentList \"{}\", \"--log-file\", \"{}\" -Verb RunAs -Wait",
-                        setup_path, action, log_path_str
+                        "Start-Process -FilePath \"{}\" -ArgumentList \"{}\" -Verb RunAs -Wait",
+                        setup_path, action
                     ),
                 ])
                 .status();
