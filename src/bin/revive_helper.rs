@@ -111,48 +111,59 @@ impl ReviveHelperApp {
         self.pilots.clear();
         if let Some(user_dirs) = UserDirs::new() {
             if let Some(docs) = user_dirs.document_dir() {
-                for condor_dir in &["Condor", "Condor3"] {
-                    let base_dir = docs.join(condor_dir);
-                    
-                    // Check global Setup.ini
-                    let global_setup = base_dir.join("Setup.ini");
-                    if global_setup.exists() {
-                        let mut vr_enabled = false;
-                        if let Ok(conf) = Ini::load_from_file(&global_setup) {
-                            if let Some(section) = conf.section(Some("Graphics")) {
-                                if let Some(val) = section.get("VROculusRift") {
-                                    vr_enabled = val.trim() == "1";
+                if let Ok(entries) = std::fs::read_dir(docs) {
+                    for entry in entries.flatten() {
+                        if !entry.path().is_dir() {
+                            continue;
+                        }
+
+                        let condor_dir = entry.file_name().to_string_lossy().into_owned();
+                        if !condor_dir.contains("Condor") {
+                            continue;
+                        }
+
+                        let base_dir = entry.path();
+                        
+                        // Check global Setup.ini
+                        let global_setup = base_dir.join("Setup.ini");
+                        if global_setup.exists() {
+                            let mut vr_enabled = false;
+                            if let Ok(conf) = Ini::load_from_file(&global_setup) {
+                                if let Some(section) = conf.section(Some("Graphics")) {
+                                    if let Some(val) = section.get("VROculusRift") {
+                                        vr_enabled = val.trim() == "1";
+                                    }
                                 }
                             }
+                            self.pilots.push(PilotStatus {
+                                name: format!("Global Settings ({})", condor_dir),
+                                path: global_setup,
+                                vr_enabled,
+                            });
                         }
-                        self.pilots.push(PilotStatus {
-                            name: format!("Global Settings ({})", condor_dir),
-                            path: global_setup,
-                            vr_enabled,
-                        });
-                    }
 
-                    // Check pilots
-                    let pilots_dir = base_dir.join("Pilots");
-                    if let Ok(entries) = std::fs::read_dir(pilots_dir) {
-                        for entry in entries.flatten() {
-                            if entry.path().is_dir() {
-                                let pilot_name = entry.file_name().to_string_lossy().into_owned();
-                                let setup_ini = entry.path().join("Setup.ini");
-                                if setup_ini.exists() {
-                                    let mut vr_enabled = false;
-                                    if let Ok(conf) = Ini::load_from_file(&setup_ini) {
-                                        if let Some(section) = conf.section(Some("Graphics")) {
-                                            if let Some(val) = section.get("VROculusRift") {
-                                                vr_enabled = val.trim() == "1";
+                        // Check pilots
+                        let pilots_dir = base_dir.join("Pilots");
+                        if let Ok(entries) = std::fs::read_dir(pilots_dir) {
+                            for entry in entries.flatten() {
+                                if entry.path().is_dir() {
+                                    let pilot_name = entry.file_name().to_string_lossy().into_owned();
+                                    let setup_ini = entry.path().join("Setup.ini");
+                                    if setup_ini.exists() {
+                                        let mut vr_enabled = false;
+                                        if let Ok(conf) = Ini::load_from_file(&setup_ini) {
+                                            if let Some(section) = conf.section(Some("Graphics")) {
+                                                if let Some(val) = section.get("VROculusRift") {
+                                                    vr_enabled = val.trim() == "1";
+                                                }
                                             }
                                         }
+                                        self.pilots.push(PilotStatus {
+                                            name: format!("Pilot: {} ({})", pilot_name, condor_dir),
+                                            path: setup_ini,
+                                            vr_enabled,
+                                        });
                                     }
-                                    self.pilots.push(PilotStatus {
-                                        name: format!("Pilot: {} ({})", pilot_name, condor_dir),
-                                        path: setup_ini,
-                                        vr_enabled,
-                                    });
                                 }
                             }
                         }
@@ -296,7 +307,7 @@ impl eframe::App for ReviveHelperApp {
                 ui.set_min_height(100.0);
                 ui.label(egui::RichText::new("Condor Settings & Pilots:").strong());
                 if self.pilots.is_empty() {
-                    ui.label(egui::RichText::new("No Setup.ini files found in Documents/Condor or Documents/Condor3.").weak());
+                    ui.label(egui::RichText::new("No Setup.ini files found in any Documents/Condor* directories.").weak());
                 } else {
                     egui::ScrollArea::vertical().id_salt("pilot_scroll").show(ui, |ui| {
                         for pilot in &self.pilots {
