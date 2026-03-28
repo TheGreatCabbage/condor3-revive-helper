@@ -22,6 +22,117 @@ use windows::core::PCWSTR;
 
 use eframe::egui;
 
+use windows::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
+use windows::Win32::Security::{DACL_SECURITY_INFORMATION, ACCESS_MASK, ACCESS_ALLOWED_ACE, ACL, ACE_HEADER};
+
+fn read_env_var_from_file(var_name: &str) -> Option<String> {
+    if let Ok(mut exe_path) = env::current_exe() {
+        exe_path.pop();
+        exe_path.push(".env");
+        if exe_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&exe_path) {
+                for line in content.lines() {
+                    let line = line.trim();
+                    if line.starts_with('#') || line.is_empty() {
+                        continue;
+                    }
+                    if let Some((key, value)) = line.split_once('=') {
+                        if key.trim() == var_name {
+                            let val = value.trim();
+                            // Remove optional quotes
+                            if (val.starts_with('"') && val.ends_with('"')) || (val.starts_with('\'') && val.ends_with('\'')) {
+                                return Some(val[1..val.len()-1].to_string());
+                            }
+                            return Some(val.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Checks if a file has strict permissions (not writable by non-admins/standard users).
+fn has_strict_permissions(path: &Path) -> bool {
+    unsafe {
+        let path_w: Vec<u16> = path.to_str().unwrap_or("").encode_utf16().chain(Some(0)).collect();
+        let mut p_psid_owner = std::ptr::null_mut();
+        let mut p_psid_group = std::ptr::null_mut();
+        let mut p_dacl = std::ptr::null_mut();
+        let mut p_security_descriptor = windows::Win32::Security::PSECURITY_DESCRIPTOR::default();
+
+        let res = GetNamedSecurityInfoW(
+            PCWSTR(path_w.as_ptr()),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            Some(&mut p_psid_owner),
+            Some(&mut p_psid_group),
+            Some(&mut p_dacl),
+            None,
+            &mut p_security_descriptor,
+        );
+
+        if res != ERROR_SUCCESS {
+            return false;
+        }
+
+        if p_dacl.is_null() {
+            let _ = LocalFree(Some(HLOCAL(p_security_descriptor.0)));
+            return false; // A NULL DACL means Everyone has full access, so not strict.
+        }
+
+        // Check the DACL for entries that grant write access to non-privileged groups
+        let mut acl_size_info = windows::Win32::Security::ACL_SIZE_INFORMATION::default();
+        if !windows::Win32::Security::GetAclInformation(
+            p_dacl,
+            &mut acl_size_info as *mut _ as *mut _,
+            std::mem::size_of::<windows::Win32::Security::ACL_SIZE_INFORMATION>() as u32,
+            windows::Win32::Security::AclSizeInformation,
+        ).is_ok() {
+            let _ = LocalFree(Some(HLOCAL(p_security_descriptor.0)));
+            return false;
+        }
+
+        for i in 0..acl_size_info.AceCount {
+            let mut p_ace = std::ptr::null_mut();
+            if windows::Win32::Security::GetAce(p_dacl, i, &mut p_ace).is_ok() {
+                let header = &*(p_ace as *const ACE_HEADER);
+                // We only care about Access Allowed ACEs for this check
+                if header.AceType == windows::Win32::Security::ACCESS_ALLOWED_ACE_TYPE {
+                    let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
+                    let mask = ace.Mask;
+                    
+                    // Check if this ACE grants write permissions
+                    let write_mask = 0x00000002 | 0x00000004 | 0x00010000 | 0x00100000; // FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE | GENERIC_WRITE
+                    if (mask & write_mask) != 0 {
+                        let sid = &ace.SidStart as *const _ as *const windows::Win32::Security::SID;
+                        
+                        // Check if the SID is a non-privileged group (like Everyone, Users, Authenticated Users)
+                        // S-1-1-0 (Everyone)
+                        // S-1-5-11 (Authenticated Users)
+                        // S-1-5-32-545 (Users)
+                        let mut sid_string = windows::core::PWSTR::null();
+                        if windows::Win32::Security::ConvertSidToStringSidW(sid, &mut sid_string).is_ok() {
+                            let s = String::from_utf16_lossy(sid_string.as_wide());
+                            let _ = LocalFree(Some(HLOCAL(sid_string.0 as *mut _)));
+                            
+                            if s == "S-1-1-0" || s == "S-1-5-11" || s == "S-1-5-32-545" {
+                                // Found a non-privileged SID with write access
+                                let _ = LocalFree(Some(HLOCAL(p_security_descriptor.0)));
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let _ = LocalFree(Some(HLOCAL(p_security_descriptor.0)));
+    }
+    true
+}
+
 const BYPASS_SERVICE_NAME: &str = "CondorReviveHelperService";
 const SETTINGS_PATH: &str = r#"Software\CondorVR"#;
 
@@ -348,14 +459,15 @@ fn main() -> eframe::Result {
                 }
             }
 
-            // Priority 3: Environment Variable (Least Secure, needs strict validation)
+            // Priority 3: .env file (Least Secure, needs strict validation)
             if revive_path.is_none() {
-                if let Ok(env_path) = env::var("C3_REVIVE_INJECTOR_PATH") {
-                    // Path Validation: Must be rooted in C:\Program Files\Revive
-                    if env_path.to_lowercase().starts_with(r"c:\program files\revive") {
+                if let Some(env_path) = read_env_var_from_file("C3_REVIVE_INJECTOR_PATH") {
+                    // Path Validation: Must be rooted in C:\Program Files\Revive OR have strict permissions
+                    let is_in_trusted_dir = env_path.to_lowercase().starts_with(r"c:\program files\revive");
+                    if is_in_trusted_dir || has_strict_permissions(Path::new(&env_path)) {
                         revive_path = Some(env_path);
                     } else {
-                        log("Warning: C3_REVIVE_INJECTOR_PATH ignored because it is not in a trusted directory.");
+                        log("Warning: C3_REVIVE_INJECTOR_PATH ignored because it is not in a trusted directory and does not have strict permissions.");
                     }
                 }
             }
