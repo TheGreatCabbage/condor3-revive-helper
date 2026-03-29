@@ -5,7 +5,6 @@
 use eframe::egui;
 use winreg::RegKey;
 use winreg::enums::*;
-use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 use directories::UserDirs;
 use ini::Ini;
 use windows::core::{HSTRING, PCWSTR};
@@ -32,9 +31,6 @@ fn show_error(msg: &str) {
 
 fn main() -> eframe::Result {
     if handle_version_args("Condor3 Revive Helper") {
-        unsafe {
-            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
-        }
         return Ok(());
     }
 

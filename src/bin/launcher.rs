@@ -16,7 +16,6 @@ use std::{thread, time::Duration, time::Instant};
 
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Services::*;
-use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 use windows::core::PCWSTR;
 
 use eframe::egui;
@@ -342,9 +341,6 @@ impl eframe::App for LauncherApp {
 
 fn main() -> eframe::Result {
     if handle_version_args("CondorVR") {
-        unsafe {
-            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
-        }
         return Ok(());
     }
 

@@ -132,6 +132,13 @@ pub fn get_companion_exe_path(exe_name: &str) -> Option<PathBuf> {
 pub fn handle_version_args(program_name: &str) -> bool {
     let args: Vec<String> = env::args().collect();
     if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
+        #[cfg(windows)]
+        {
+            use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+            unsafe {
+                let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+            }
+        }
         println!("{} version {}", program_name, env!("CARGO_PKG_VERSION"));
         true
     } else {
