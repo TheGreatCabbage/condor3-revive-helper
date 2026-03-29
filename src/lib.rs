@@ -15,45 +15,43 @@ pub fn update_condor_setup_ini(vr_enabled: bool) -> Vec<(String, bool)> {
     let mut results = Vec::new();
     let val = if vr_enabled { "1" } else { "0" };
 
-    if let Some(user_dirs) = UserDirs::new() {
-        if let Some(docs) = user_dirs.document_dir() {
-            if let Ok(entries) = std::fs::read_dir(docs) {
-                for entry in entries.flatten() {
-                    if !entry.path().is_dir() {
-                        continue;
-                    }
+    if let Some(user_dirs) = UserDirs::new()
+        && let Some(docs) = user_dirs.document_dir()
+        && let Ok(entries) = std::fs::read_dir(docs) {
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
 
-                    let cond_dir_name = entry.file_name().to_string_lossy().into_owned();
-                    if !cond_dir_name.contains("Condor") {
-                        continue;
-                    }
+            let cond_dir_name = entry.file_name().to_string_lossy().into_owned();
+            if !cond_dir_name.contains("Condor") {
+                continue;
+            }
 
-                    let base_dir = entry.path();
-                    
-                    // 1. Update global Setup.ini
-                    let global_setup = base_dir.join("Setup.ini");
-                    if global_setup.exists() {
-                        if update_ini_file(&global_setup, val) {
-                            results.push((format!("Global Settings ({})", cond_dir_name), true));
-                        } else {
-                            results.push((format!("Global Settings ({})", cond_dir_name), false));
-                        }
-                    }
+            let base_dir = entry.path();
+            
+            // 1. Update global Setup.ini
+            let global_setup = base_dir.join("Setup.ini");
+            if global_setup.exists() {
+                if update_ini_file(&global_setup, val) {
+                    results.push((format!("Global Settings ({})", cond_dir_name), true));
+                } else {
+                    results.push((format!("Global Settings ({})", cond_dir_name), false));
+                }
+            }
 
-                    // 2. Update all pilot Setup.ini files
-                    let pilots_dir = base_dir.join("Pilots");
-                    if let Ok(p_entries) = std::fs::read_dir(pilots_dir) {
-                        for p_entry in p_entries.flatten() {
-                            if p_entry.path().is_dir() {
-                                let p_name = p_entry.file_name().to_string_lossy().into_owned();
-                                let p_setup = p_entry.path().join("Setup.ini");
-                                if p_setup.exists() {
-                                    if update_ini_file(&p_setup, val) {
-                                        results.push((format!("Pilot: {} ({})", p_name, cond_dir_name), true));
-                                    } else {
-                                        results.push((format!("Pilot: {} ({})", p_name, cond_dir_name), false));
-                                    }
-                                }
+            // 2. Update all pilot Setup.ini files
+            let pilots_dir = base_dir.join("Pilots");
+            if let Ok(p_entries) = std::fs::read_dir(pilots_dir) {
+                for p_entry in p_entries.flatten() {
+                    if p_entry.path().is_dir() {
+                        let p_name = p_entry.file_name().to_string_lossy().into_owned();
+                        let p_setup = p_entry.path().join("Setup.ini");
+                        if p_setup.exists() {
+                            if update_ini_file(&p_setup, val) {
+                                results.push((format!("Pilot: {} ({})", p_name, cond_dir_name), true));
+                            } else {
+                                results.push((format!("Pilot: {} ({})", p_name, cond_dir_name), false));
                             }
                         }
                     }
@@ -148,12 +146,10 @@ pub fn find_revive_injector() -> Option<String> {
         use winreg::RegKey;
         use winreg::enums::*;
         let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-        if let Ok(settings_key) = hklm.open_subkey(SETTINGS_PATH) {
-            if let Ok(revive_path) = settings_key.get_value::<String, _>("ReviveInjectorPath") {
-                if Path::new(&revive_path).exists() {
-                    return Some(revive_path);
-                }
-            }
+        if let Ok(settings_key) = hklm.open_subkey(SETTINGS_PATH)
+            && let Ok(revive_path) = settings_key.get_value::<String, _>("ReviveInjectorPath")
+            && Path::new(&revive_path).exists() {
+            return Some(revive_path);
         }
     }
 

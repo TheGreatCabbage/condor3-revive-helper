@@ -175,13 +175,12 @@ fn update_service_config(path: &str) -> Result<(), windows::core::Error> {
         let mut service_res =
             OpenServiceW(scm, PCWSTR(service_name_w.as_ptr()), SERVICE_CHANGE_CONFIG);
 
-        if let Err(ref e) = service_res {
-            if e.code() == ERROR_ACCESS_DENIED.to_hresult() {
-                // Try to fix permissions and then try again
-                let _ = allow_everyone_to_start_service();
-                service_res =
-                    OpenServiceW(scm, PCWSTR(service_name_w.as_ptr()), SERVICE_CHANGE_CONFIG);
-            }
+        if let Err(ref e) = service_res
+            && e.code() == ERROR_ACCESS_DENIED.to_hresult() {
+            // Try to fix permissions and then try again
+            let _ = allow_everyone_to_start_service();
+            service_res =
+                OpenServiceW(scm, PCWSTR(service_name_w.as_ptr()), SERVICE_CHANGE_CONFIG);
         }
 
         let service = service_res?;
@@ -265,12 +264,11 @@ fn uninstall_service(name: &str) -> Result<(), windows::core::Error> {
         let mut service_res =
             OpenServiceW(scm, PCWSTR(service_name_w.as_ptr()), SERVICE_ALL_ACCESS);
 
-        if let Err(ref e) = service_res {
-            if e.code() == ERROR_ACCESS_DENIED.to_hresult() {
-                // Try to fix permissions and then try again
-                let _ = allow_everyone_to_start_service();
-                service_res = OpenServiceW(scm, PCWSTR(service_name_w.as_ptr()), SERVICE_ALL_ACCESS);
-            }
+        if let Err(ref e) = service_res
+            && e.code() == ERROR_ACCESS_DENIED.to_hresult() {
+            // Try to fix permissions and then try again
+            let _ = allow_everyone_to_start_service();
+            service_res = OpenServiceW(scm, PCWSTR(service_name_w.as_ptr()), SERVICE_ALL_ACCESS);
         }
 
         if let Ok(service) = service_res {
@@ -280,10 +278,9 @@ fn uninstall_service(name: &str) -> Result<(), windows::core::Error> {
             // Wait for service to stop
             for _ in 0..50 {
                 let mut status = SERVICE_STATUS::default();
-                if QueryServiceStatus(service, &mut status).is_ok() {
-                    if status.dwCurrentState == SERVICE_STOPPED {
-                        break;
-                    }
+                if QueryServiceStatus(service, &mut status).is_ok()
+                    && status.dwCurrentState == SERVICE_STOPPED {
+                    break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }

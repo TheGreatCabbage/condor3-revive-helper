@@ -34,23 +34,21 @@ fn read_env_var_from_file(var_name: &str) -> Option<String> {
     if let Ok(mut exe_path) = env::current_exe() {
         exe_path.pop();
         exe_path.push(".env");
-        if exe_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&exe_path) {
-                for line in content.lines() {
-                    let line = line.trim();
-                    if line.starts_with('#') || line.is_empty() {
-                        continue;
+        if exe_path.exists()
+            && let Ok(content) = std::fs::read_to_string(&exe_path) {
+            for line in content.lines() {
+                let line = line.trim();
+                if line.starts_with('#') || line.is_empty() {
+                    continue;
+                }
+                if let Some((key, value)) = line.split_once('=')
+                    && key.trim() == var_name {
+                    let val = value.trim();
+                    // Remove optional quotes
+                    if (val.starts_with('"') && val.ends_with('"')) || (val.starts_with('\'') && val.ends_with('\'')) {
+                        return Some(val[1..val.len()-1].to_string());
                     }
-                    if let Some((key, value)) = line.split_once('=') {
-                        if key.trim() == var_name {
-                            let val = value.trim();
-                            // Remove optional quotes
-                            if (val.starts_with('"') && val.ends_with('"')) || (val.starts_with('\'') && val.ends_with('\'')) {
-                                return Some(val[1..val.len()-1].to_string());
-                            }
-                            return Some(val.to_string());
-                        }
-                    }
+                    return Some(val.to_string());
                 }
             }
         }
@@ -89,12 +87,12 @@ fn has_strict_permissions(path: &Path) -> bool {
 
         // Check the DACL for entries that grant write access to non-privileged groups
         let mut acl_size_info = windows::Win32::Security::ACL_SIZE_INFORMATION::default();
-        if !windows::Win32::Security::GetAclInformation(
+        if windows::Win32::Security::GetAclInformation(
             p_dacl,
             &mut acl_size_info as *mut _ as *mut _,
             std::mem::size_of::<windows::Win32::Security::ACL_SIZE_INFORMATION>() as u32,
             windows::Win32::Security::AclSizeInformation,
-        ).is_ok() {
+        ).is_err() {
             let _ = LocalFree(Some(HLOCAL(p_security_descriptor.0)));
             return false;
         }
@@ -257,16 +255,15 @@ impl LauncherApp {
     }
 
     fn open_settings(&self) {
-        if let Some(p) = get_companion_exe_path("gui.exe") {
-            if p.exists() {
-                let mut cmd = std::process::Command::new(p);
-                #[cfg(windows)]
-                {
-                    use std::os::windows::process::CommandExt;
-                    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-                }
-                let _ = cmd.spawn();
+        if let Some(p) = get_companion_exe_path("gui.exe")
+            && p.exists() {
+            let mut cmd = std::process::Command::new(p);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
             }
+            let _ = cmd.spawn();
         }
     }
 }
@@ -385,15 +382,14 @@ fn main() -> eframe::Result {
             let mut revive_path = find_revive_injector();
 
             // Priority 3: .env file (Least Secure, needs strict validation)
-            if revive_path.is_none() {
-                if let Some(env_path) = read_env_var_from_file("C3_REVIVE_INJECTOR_PATH") {
-                    // Path Validation: Must be rooted in C:\Program Files\Revive OR have strict permissions
-                    let is_in_trusted_dir = env_path.to_lowercase().starts_with(r"c:\program files\revive");
-                    if is_in_trusted_dir || has_strict_permissions(Path::new(&env_path)) {
-                        revive_path = Some(env_path);
-                    } else {
-                        log("Warning: C3_REVIVE_INJECTOR_PATH ignored because it is not in a trusted directory and does not have strict permissions.");
-                    }
+            if revive_path.is_none()
+                && let Some(env_path) = read_env_var_from_file("C3_REVIVE_INJECTOR_PATH") {
+                // Path Validation: Must be rooted in C:\Program Files\Revive OR have strict permissions
+                let is_in_trusted_dir = env_path.to_lowercase().starts_with(r"c:\program files\revive");
+                if is_in_trusted_dir || has_strict_permissions(Path::new(&env_path)) {
+                    revive_path = Some(env_path);
+                } else {
+                    log("Warning: C3_REVIVE_INJECTOR_PATH ignored because it is not in a trusted directory and does not have strict permissions.");
                 }
             }
 

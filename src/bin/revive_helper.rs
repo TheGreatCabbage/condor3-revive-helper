@@ -7,7 +7,6 @@ use winreg::RegKey;
 use winreg::enums::*;
 use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 use directories::UserDirs;
-use std::path::{PathBuf};
 use ini::Ini;
 use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONERROR, SW_HIDE};
@@ -52,7 +51,6 @@ fn main() -> eframe::Result {
 
 struct PilotStatus {
     name: String,
-    path: PathBuf,
     vr_enabled: bool,
 }
 
@@ -109,62 +107,54 @@ impl ReviveHelperApp {
 
         // Pilot status
         self.pilots.clear();
-        if let Some(user_dirs) = UserDirs::new() {
-            if let Some(docs) = user_dirs.document_dir() {
-                if let Ok(entries) = std::fs::read_dir(docs) {
-                    for entry in entries.flatten() {
-                        if !entry.path().is_dir() {
-                            continue;
-                        }
+        if let Some(user_dirs) = UserDirs::new()
+            && let Some(docs) = user_dirs.document_dir()
+            && let Ok(entries) = std::fs::read_dir(docs) {
+            for entry in entries.flatten() {
+                if !entry.path().is_dir() {
+                    continue;
+                }
 
-                        let condor_dir = entry.file_name().to_string_lossy().into_owned();
-                        if !condor_dir.contains("Condor") {
-                            continue;
-                        }
+                let condor_dir = entry.file_name().to_string_lossy().into_owned();
+                if !condor_dir.contains("Condor") {
+                    continue;
+                }
 
-                        let base_dir = entry.path();
-                        
-                        // Check global Setup.ini
-                        let global_setup = base_dir.join("Setup.ini");
-                        if global_setup.exists() {
-                            let mut vr_enabled = false;
-                            if let Ok(conf) = Ini::load_from_file(&global_setup) {
-                                if let Some(section) = conf.section(Some("Graphics")) {
-                                    if let Some(val) = section.get("VROculusRift") {
-                                        vr_enabled = val.trim() == "1";
-                                    }
+                let base_dir = entry.path();
+                
+                // Check global Setup.ini
+                let global_setup = base_dir.join("Setup.ini");
+                if global_setup.exists() {
+                    let mut vr_enabled = false;
+                    if let Ok(conf) = Ini::load_from_file(&global_setup)
+                        && let Some(section) = conf.section(Some("Graphics"))
+                        && let Some(val) = section.get("VROculusRift") {
+                        vr_enabled = val.trim() == "1";
+                    }
+                    self.pilots.push(PilotStatus {
+                        name: format!("Global Settings ({})", condor_dir),
+                        vr_enabled,
+                    });
+                }
+
+                // Check pilots
+                let pilots_dir = base_dir.join("Pilots");
+                if let Ok(p_entries) = std::fs::read_dir(pilots_dir) {
+                    for p_entry in p_entries.flatten() {
+                        if p_entry.path().is_dir() {
+                            let pilot_name = p_entry.file_name().to_string_lossy().into_owned();
+                            let setup_ini = p_entry.path().join("Setup.ini");
+                            if setup_ini.exists() {
+                                let mut vr_enabled = false;
+                                if let Ok(conf) = Ini::load_from_file(&setup_ini)
+                                    && let Some(section) = conf.section(Some("Graphics"))
+                                    && let Some(val) = section.get("VROculusRift") {
+                                    vr_enabled = val.trim() == "1";
                                 }
-                            }
-                            self.pilots.push(PilotStatus {
-                                name: format!("Global Settings ({})", condor_dir),
-                                path: global_setup,
-                                vr_enabled,
-                            });
-                        }
-
-                        // Check pilots
-                        let pilots_dir = base_dir.join("Pilots");
-                        if let Ok(p_entries) = std::fs::read_dir(pilots_dir) {
-                            for p_entry in p_entries.flatten() {
-                                if p_entry.path().is_dir() {
-                                    let pilot_name = p_entry.file_name().to_string_lossy().into_owned();
-                                    let setup_ini = p_entry.path().join("Setup.ini");
-                                    if setup_ini.exists() {
-                                        let mut vr_enabled = false;
-                                        if let Ok(conf) = Ini::load_from_file(&setup_ini) {
-                                            if let Some(section) = conf.section(Some("Graphics")) {
-                                                if let Some(val) = section.get("VROculusRift") {
-                                                    vr_enabled = val.trim() == "1";
-                                                }
-                                            }
-                                        }
-                                        self.pilots.push(PilotStatus {
-                                            name: format!("Pilot: {} ({})", pilot_name, condor_dir),
-                                            path: setup_ini,
-                                            vr_enabled,
-                                        });
-                                    }
-                                }
+                                self.pilots.push(PilotStatus {
+                                    name: format!("Pilot: {} ({})", pilot_name, condor_dir),
+                                    vr_enabled,
+                                });
                             }
                         }
                     }
@@ -194,18 +184,19 @@ impl ReviveHelperApp {
             let log_path = get_secure_log_path("CondorVR", "setup.log");
 
             // Use native Windows API ShellExecuteExW to trigger UAC elevation
-            let mut sei = SHELLEXECUTEINFOW::default();
-            sei.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-            sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-            sei.lpVerb = windows::core::w!("runas");
+            let mut sei = SHELLEXECUTEINFOW {
+                cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+                fMask: SEE_MASK_NOCLOSEPROCESS,
+                lpVerb: windows::core::w!("runas"),
+                nShow: SW_HIDE.0,
+                ..Default::default()
+            };
             
             let path_w = HSTRING::from(&setup_path);
             sei.lpFile = PCWSTR(path_w.as_ptr());
             
             let action_w = HSTRING::from(action);
             sei.lpParameters = PCWSTR(action_w.as_ptr());
-            
-            sei.nShow = SW_HIDE.0 as i32;
 
             let success = unsafe { ShellExecuteExW(&mut sei) }.is_ok();
 
@@ -234,14 +225,13 @@ impl ReviveHelperApp {
             }
 
             // Read log file back
-            if let Ok(l) = std::fs::read_to_string(&log_path) {
-                if !l.is_empty() {
-                    self.logs.push_str("\n--- Setup Logs ---\n");
-                    self.logs.push_str(&l);
-                    if l.contains("ERROR:") {
-                        self.show_logs = true;
-                        configurer_success = false; // Override success if the log contains errors
-                    }
+            if let Ok(l) = std::fs::read_to_string(&log_path)
+                && !l.is_empty() {
+                self.logs.push_str("\n--- Setup Logs ---\n");
+                self.logs.push_str(&l);
+                if l.contains("ERROR:") {
+                    self.show_logs = true;
+                    configurer_success = false; // Override success if the log contains errors
                 }
             }
             let _ = std::fs::remove_file(log_path);

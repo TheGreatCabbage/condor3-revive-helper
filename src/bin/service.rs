@@ -206,8 +206,10 @@ fn is_process_running(process_name: &str) -> bool {
             Err(_) => return false,
         };
 
-        let mut entry = PROCESSENTRY32W::default();
-        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
 
         if Process32FirstW(snapshot, &mut entry).is_ok() {
             loop {
